@@ -23,7 +23,7 @@ COMPONENTS_BLSYS   := bltime blfdt blmtd bloop looprt loopset
 COMPONENTS_VFS     := romfs
 
 INCLUDE_COMPONENTS += freertos_riscv_ram bl602 bl602_std newlibc wifi blcrypto_suite wifi_manager wpa_supplicant bl_os_adapter wifi_hosal hosal lwip_altcp_tls_mbedtls lwip lwip_dhcpd mbedtls_lts vfs yloop utils blog
-INCLUDE_COMPONENTS += easyflash4 coredump rfparam_adapter_tmp shared
+INCLUDE_COMPONENTS += easyflash4 coredump rfparam_adapter_tmp
 INCLUDE_COMPONENTS += $(COMPONENTS_NETWORK)
 INCLUDE_COMPONENTS += $(COMPONENTS_BLSYS)
 INCLUDE_COMPONENTS += $(COMPONENTS_VFS)
