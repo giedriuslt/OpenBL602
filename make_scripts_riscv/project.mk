@@ -385,8 +385,6 @@ CFLAGS := $(strip \
 	$(EXTRA_CFLAGS)) \
 	-save-temps=obj
 
-CFLAGS += -DPLATFORM_BL602=1
-
 CXXFLAGS := $(strip \
 	-std=c++11 \
 	$(OPTIMIZATION_FLAGS) $(DEBUG_FLAGS) \

@@ -49,9 +49,7 @@
 #include <bl_sys_time.h>
 #include <fdt.h>
 #include <vfs.h>
-#ifdef SYS_AOS_CLI_ENABLE
 #include <cli.h>
-#endif
 #include <libfdt.h>
 #include <device/vfs_uart.h>
 #include <blog.h>
