@@ -47,7 +47,7 @@
 #include <bl_romfs.h>
 #include <fdt.h>
 
-#include <easyflash.h>
+//#include <easyflash.h>
 #include <bl60x_fw_api.h>
 #include <wifi_mgmr_ext.h>
 #include <utils_log.h>
@@ -258,20 +258,20 @@ static void _connect_wifi()
     memset(chan, 0, sizeof(chan));
 
     memset(val_buf, 0, sizeof(val_buf));
-    ef_get_env_blob((const char *)WIFI_AP_PSM_INFO_SSID, val_buf, val_len, NULL);
+    //ef_get_env_blob((const char *)WIFI_AP_PSM_INFO_SSID, val_buf, val_len, NULL);
     if (val_buf[0]) {
         /*We believe that when ssid is set, wifi_confi is OK*/
         strncpy(ssid, val_buf, sizeof(ssid) - 1);
 
         /*setup password ans PMK stuff from ENV*/
         memset(val_buf, 0, sizeof(val_buf));
-        ef_get_env_blob((const char *)WIFI_AP_PSM_INFO_PASSWORD, val_buf, val_len, NULL);
+        //ef_get_env_blob((const char *)WIFI_AP_PSM_INFO_PASSWORD, val_buf, val_len, NULL);
         if (val_buf[0]) {
             strncpy(password, val_buf, sizeof(password) - 1);
         }
 
         memset(val_buf, 0, sizeof(val_buf));
-        ef_get_env_blob((const char *)WIFI_AP_PSM_INFO_PMK, val_buf, val_len, NULL);
+        //ef_get_env_blob((const char *)WIFI_AP_PSM_INFO_PMK, val_buf, val_len, NULL);
         if (val_buf[0]) {
             strncpy(pmk, val_buf, sizeof(pmk) - 1);
         }
@@ -288,18 +288,18 @@ static void _connect_wifi()
                     strlen(ssid),
                     pmk
             );
-            ef_set_env(WIFI_AP_PSM_INFO_PMK, pmk);
-            ef_save_env();
+            //ef_set_env(WIFI_AP_PSM_INFO_PMK, pmk);
+            //ef_save_env();
         }
         memset(val_buf, 0, sizeof(val_buf));
-        ef_get_env_blob((const char *)WIFI_AP_PSM_INFO_CHANNEL, val_buf, val_len, NULL);
+        //ef_get_env_blob((const char *)WIFI_AP_PSM_INFO_CHANNEL, val_buf, val_len, NULL);
         if (val_buf[0]) {
             strncpy(chan, val_buf, sizeof(chan) - 1);
             printf("connect wifi channel = %s\r\n", chan);
             _chan_str_to_hex(&band, &freq, chan);
         }
         memset(val_buf, 0, sizeof(val_buf));
-        ef_get_env_blob((const char *)WIFI_AP_PSM_INFO_BSSID, val_buf, val_len, NULL);
+        //ef_get_env_blob((const char *)WIFI_AP_PSM_INFO_BSSID, val_buf, val_len, NULL);
         if (val_buf[0]) {
             strncpy(bssid, val_buf, sizeof(bssid) - 1);
             printf("connect wifi bssid = %s\r\n", bssid);
@@ -679,7 +679,7 @@ static void _cli_init()
     /*Put CLI which needs to be init here*/
 int codex_debug_cli_init(void);
     codex_debug_cli_init();
-    easyflash_cli_init();
+    //easyflash_cli_init();
     network_netutils_iperf_cli_register();
     network_netutils_tcpserver_cli_register();
     network_netutils_tcpclinet_cli_register();
@@ -735,7 +735,7 @@ static void aos_loop_proc(void *pvParameters)
     looprt_start(proc_stack_looprt, 512, &proc_task_looprt);
     loopset_led_hook_on_looprt();
 
-    easyflash_init();
+    //easyflash_init();
     vfs_init();
     vfs_device_init();
 
