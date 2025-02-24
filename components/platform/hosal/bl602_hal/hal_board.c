@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2022 Bouffalolab.
+ * Copyright (c) 2020 Bouffalolab.
  *
  * This file is part of
  *     *** Bouffalolab Software Dev Kit ***
@@ -471,7 +471,7 @@ static void update_poweroffset_config_with_order(const void *fdt, int offset1, c
                 if (0 == update_poweroffset_config_get_mac_from_dtb(fdt, offset1, poweroffset_tmp)) {
                     set = 1;
                     blog_debug("get pwr offset from F(f) ready\r\n");
-                    if ('F' == order[i]) {
+                    if ('B' == order[i]) {
                         /*non-incremental mode*/
                         for (j = 0; j < sizeof(poweroffset); j++) {
                             poweroffset[j] = poweroffset_tmp[j];
@@ -573,10 +573,10 @@ static void update_poweroffset_config_rftv(uint32_t tlv_addr, const char *pw_mod
                 if (rftlv_get(tlv_addr, RFTLV_TYPE_PWR_OFFSET, sizeof(poweroffset_tmp), poweroffset_tmp) > 0) {
                     set = 1;
                     blog_debug("get pwr offset from F(f) ready\r\n");
-                    if ('F' == pw_mode[i]) {
+                    if ('B' == pw_mode[i]) {
                         /*non-incremental mode*/
                         for (j = 0; j < sizeof(poweroffset); j++) {
-                            poweroffset[j] = (poweroffset_tmp[j] - 10)*4;
+                            poweroffset[j] = poweroffset_tmp[j];
                         }
                         blog_debug("Use pwr offset from F only\r\n");
                         goto break_scan;
@@ -584,7 +584,7 @@ static void update_poweroffset_config_rftv(uint32_t tlv_addr, const char *pw_mod
                         /*incremental mode*/
                         blog_debug("Use pwr offset from f in incremental mode\r\n");
                         for (j = 0; j < sizeof(poweroffset); j++) {
-                            poweroffset[j] = (poweroffset_tmp[j] - 10)*4;
+                            poweroffset[j] += poweroffset_tmp[j];
                         }
                     }
                     goto break_scan;
