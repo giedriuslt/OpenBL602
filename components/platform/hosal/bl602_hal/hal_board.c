@@ -449,7 +449,7 @@ static void update_poweroffset_config_with_order(const void *fdt, int offset1, c
                     if ('B' == order[i]) {
                         /*non-incremental mode*/
                         for (j = 0; j < sizeof(poweroffset); j++) {
-                            poweroffset[j] = poweroffset_tmp[j];
+                            poweroffset[j] = 3;
                         }
                         blog_debug("Use pwr offset from B only\r\n");
                         goto break_scan;
@@ -457,7 +457,7 @@ static void update_poweroffset_config_with_order(const void *fdt, int offset1, c
                         /*incremental mode*/
                         blog_debug("Use pwr offset from b in incremental mode\r\n");
                         for (j = 0; j < sizeof(poweroffset); j++) {
-                            poweroffset[j] += poweroffset_tmp[j];
+                            poweroffset[j] = 3;
                         }
                     }
                 } else {
@@ -482,7 +482,7 @@ static void update_poweroffset_config_with_order(const void *fdt, int offset1, c
                         /*incremental mode*/
                         blog_debug("Use pwr offset from f in incremental mode\r\n");
                         for (j = 0; j < sizeof(poweroffset); j++) {
-                            poweroffset[j] += poweroffset_tmp[j];
+                            poweroffset[j] += 3;
                         }
                     }
                     goto break_scan;
@@ -576,7 +576,7 @@ static void update_poweroffset_config_rftv(uint32_t tlv_addr, const char *pw_mod
                     if ('B' == pw_mode[i]) {
                         /*non-incremental mode*/
                         for (j = 0; j < sizeof(poweroffset); j++) {
-                            poweroffset[j] = poweroffset_tmp[j];
+                            poweroffset[j] = 3;
                         }
                         blog_debug("Use pwr offset from F only\r\n");
                         goto break_scan;
@@ -584,7 +584,7 @@ static void update_poweroffset_config_rftv(uint32_t tlv_addr, const char *pw_mod
                         /*incremental mode*/
                         blog_debug("Use pwr offset from f in incremental mode\r\n");
                         for (j = 0; j < sizeof(poweroffset); j++) {
-                            poweroffset[j] += poweroffset_tmp[j];
+                            poweroffset[j] =3;
                         }
                     }
                     goto break_scan;
