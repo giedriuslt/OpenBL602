@@ -1014,8 +1014,8 @@ void ADC_Tsen_Init(ADC_TSEN_MOD_Type tsenMod)
 *******************************************************************************/
 uint32_t TSEN_Get_V_Error(void)
 {
-    uint32_t v0 = 0, v1 = 0;
-    uint32_t v_error = 0;
+    uint32_t v0 = 0, v1 = 0, j = 0;
+    static uint32_t v_error = 0;
     uint32_t regVal = 0;
     ADC_Result_Type result;
     uint32_t tmpVal;
@@ -1029,8 +1029,13 @@ uint32_t TSEN_Get_V_Error(void)
     ADC_SET_TSVBE_LOW();
 
     ADC_Start();
-    while (ADC_Get_FIFO_Count() == 0)
+    while (ADC_Get_FIFO_Count() == 0 && j++ <20000)
         ;
+	if (j>=20000)
+	{
+			return v_error;
+	}
+	
     regVal = ADC_Read_FIFO();
     gainCalEnabled=adcGainCoeffCal.adcGainCoeffEnable;
     adcGainCoeffCal.adcGainCoeffEnable=0;
@@ -1047,8 +1052,14 @@ uint32_t TSEN_Get_V_Error(void)
     ADC_SET_TSVBE_HIGH();
 
     ADC_Start();
-    while (ADC_Get_FIFO_Count() == 0)
+	j=0;
+    while (ADC_Get_FIFO_Count() == 0 && j++ <20000)
         ;
+	if (j>=20000)
+	{
+			return v_error;
+	}	
+	
     regVal = ADC_Read_FIFO();    
     gainCalEnabled=adcGainCoeffCal.adcGainCoeffEnable;
     adcGainCoeffCal.adcGainCoeffEnable=0;
@@ -1182,7 +1193,8 @@ void ADC_SET_TSVBE_HIGH(void)
 float TSEN_Get_Temp(uint32_t tsen_offset)
 {
     uint32_t v0 = 0, v1 = 0;
-    float temp = 0;
+    float temp = 0, tmp_temp = 25;
+	int j = 0;
     uint32_t regVal = 0;
     ADC_Result_Type result;
     uint32_t tmpVal;
@@ -1196,8 +1208,12 @@ float TSEN_Get_Temp(uint32_t tsen_offset)
     ADC_SET_TSVBE_LOW();
 
     ADC_Start();
-    while (ADC_Get_FIFO_Count() == 0)
+    while (ADC_Get_FIFO_Count() == 0 && j++ < 20000)
         ;
+	if (j>=20000)
+	{
+			return tmp_temp;
+	}
     regVal = ADC_Read_FIFO();
     
     gainCalEnabled=adcGainCoeffCal.adcGainCoeffEnable;
@@ -1215,8 +1231,13 @@ float TSEN_Get_Temp(uint32_t tsen_offset)
     ADC_SET_TSVBE_HIGH();
 
     ADC_Start();
-    while (ADC_Get_FIFO_Count() == 0)
+	j=0;
+    while (ADC_Get_FIFO_Count() == 0 && j++ < 20000)
         ;
+	if (j>=20000)
+	{
+			return tmp_temp;
+	}	
     regVal = ADC_Read_FIFO();
     gainCalEnabled=adcGainCoeffCal.adcGainCoeffEnable;
     adcGainCoeffCal.adcGainCoeffEnable=0;
@@ -1232,7 +1253,8 @@ float TSEN_Get_Temp(uint32_t tsen_offset)
     {
         temp = (((float)v1 - (float)v0) - (float)tsen_offset) / 7.753;
     }
-
+	
+	tmp_temp = temp;
     return temp;
 }
 

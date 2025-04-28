@@ -80,16 +80,19 @@ void ADC_Clock_Init(uint8_t div)
 
 void TSEN_Calibration(void)
 {
+	int j;
     ADC_SET_TSVBE_LOW();
     ADC_Start();
     ARCH_Delay_MS(100);
-    while(ADC_Get_FIFO_Count() == 0);
+	j = 0;
+    while(ADC_Get_FIFO_Count() == 0 && j++ < 20000);
     ADC_Read_FIFO();
 
     ADC_SET_TSVBE_HIGH();
     ADC_Start();
     ARCH_Delay_MS(100);
-    while(ADC_Get_FIFO_Count() == 0);
+	j = 0;
+    while(ADC_Get_FIFO_Count() == 0 && j++ < 20000);
     ADC_Read_FIFO();
 
     ADC_SET_TSVBE_LOW();
@@ -99,7 +102,7 @@ static void ADC_tsen_case(void)
 {
 	ADC_Result_Type result;
 	uint32_t regVal=0;
-    uint8_t i=0;
+    uint8_t i=0, j=0;
     uint32_t v0=0,v1=0;
     float v_error=0;
 
@@ -118,8 +121,9 @@ static void ADC_tsen_case(void)
 	for(i=0;i<40;i++){
 		ADC_Start();
 
-		while(ADC_Get_FIFO_Count() == 0);
-
+		j =0;
+		while(ADC_Get_FIFO_Count() == 0 && j++ <20000);
+		j = 0;
 		do{
 			regVal = ADC_Read_FIFO();
 			ADC_Parse_Result(&regVal,1,&result);
@@ -129,7 +133,7 @@ static void ADC_tsen_case(void)
             }else{
                 v1 = result.value;
             }  
-		}while(ADC_Get_FIFO_Count() != 0);
+		}while(ADC_Get_FIFO_Count() != 0 && j++ <20000);
 
         if(i%2 !=0){
               v_error = (float)v0 - (float)v1;
