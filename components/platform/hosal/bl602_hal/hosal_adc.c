@@ -103,12 +103,21 @@ void adc_data_update (void *p_arg, uint32_t flag)
 {
     hosal_adc_dev_t *adc = (hosal_adc_dev_t *)p_arg;
     hosal_adc_ctx_t *pstctx = (hosal_adc_ctx_t *)adc->priv;
+    DMA_LLI_Ctrl_Type *lli = (DMA_LLI_Ctrl_Type *)pstctx->adc_lli;
+    uint32_t cur_dst;
 
-    if (pstctx->lli_flag == 0) {
-        pstctx->channel_data = (uint32_t *)((DMA_LLI_Ctrl_Type *)(pstctx->adc_lli))[0].destDmaAddr;
-        pstctx->lli_flag = 1;
+    /* Determine the just-completed ping-pong buffer from the DMA's live
+       destination pointer, not a software toggle. A coalesced transfer-
+       complete interrupt (one ISR for two completions) would desync the
+       toggle from the hardware and leave us reading the buffer the DMA is
+       still writing. */
+    cur_dst = BL_RD_REG(DMA_BASE + DMA_CHANNEL_OFFSET + adc->dma_chan * 0x100, DMA_DSTADDR);
 
-#ifdef CONF_ADC_ENABLE_TSEN 
+    if (cur_dst >= lli[1].destDmaAddr) {
+        /* DMA is filling buffer 1 => buffer 0 just completed */
+        pstctx->channel_data = (uint32_t *)lli[0].destDmaAddr;
+
+#ifdef CONF_ADC_ENABLE_TSEN
         if (pstctx->tsen_flag == 0) {
             update_tsen_v(pstctx, 0);
             ADC_SET_TSVBE_HIGH();
@@ -123,8 +132,8 @@ void adc_data_update (void *p_arg, uint32_t flag)
 #endif
 
     } else {
-        pstctx->channel_data = (uint32_t *)((DMA_LLI_Ctrl_Type *)(pstctx->adc_lli))[1].destDmaAddr;
-        pstctx->lli_flag = 0;
+        /* DMA is filling buffer 0 => buffer 1 just completed */
+        pstctx->channel_data = (uint32_t *)lli[1].destDmaAddr;
     }
 }
 
