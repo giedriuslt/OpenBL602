@@ -274,7 +274,7 @@ void aos_loop_run(void)
             
             // If 1000 loops took less than 100ms, yloop is spinning out of control!
             if (duration_ms < 100) {
-                LOGE(TAG, "CRITICAL: yloop is spinning! 1000 loops took only %u ms. delayed_ms was %u, readers: %d", 
+                LOGE(TAG, "CRITICAL: yloop is spinning! 1000 loops took only %lu ms. delayed_ms was %lu, readers: %d", 
                      duration_ms, delayed_ms, readers);
             }
             
