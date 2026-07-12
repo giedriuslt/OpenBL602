@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <FreeRTOS.h>
+#include <task.h>
 #include <sys/fcntl.h>
 #include <aos/list.h>
 #include <aos/kernel.h>
