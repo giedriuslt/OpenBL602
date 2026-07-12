@@ -20,6 +20,19 @@
 
 #define TAG "yloop"
 
+// Fallback definitions for the BL602 compiler if the SDK header missed them
+#ifndef POLLERR
+#define POLLERR  0x0008
+#endif
+
+#ifndef POLLHUP
+#define POLLHUP  0x0010
+#endif
+
+#ifndef POLLNVAL
+#define POLLNVAL 0x0020
+#endif
+
 typedef struct yloop_timeout_s {
     dlist_t          next;
     long long        timeout_ms;
