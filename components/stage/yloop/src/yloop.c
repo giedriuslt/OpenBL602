@@ -263,6 +263,24 @@ void aos_loop_run(void)
             ctx->pollfds[i].fd = ctx->readers[i].sock;
             ctx->pollfds[i].events = POLLIN;
         }
+		static uint32_t last_log_tick = 0;
+        static uint32_t loop_counter = 0;
+        loop_counter++;
+        
+        // Every 1000 iterations, check if we are looping too fast
+        if (loop_counter >= 1000) {
+            uint32_t current_tick = xTaskGetTickCount();
+            uint32_t duration_ms = (current_tick - last_log_tick) * portTICK_PERIOD_MS;
+            
+            // If 1000 loops took less than 100ms, yloop is spinning out of control!
+            if (duration_ms < 100) {
+                LOGE(TAG, "CRITICAL: yloop is spinning! 1000 loops took only %d ms. delayed_ms was %d, readers: %d", 
+                     duration_ms, delayed_ms, readers);
+            }
+            
+            loop_counter = 0;
+            last_log_tick = current_tick;
+        }
 
         int res = aos_poll(ctx->pollfds, readers, delayed_ms);
 
