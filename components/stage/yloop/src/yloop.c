@@ -273,13 +273,23 @@ void aos_loop_run(void)
             continue;
         }
 
-        for (i = 0; i < readers; i++) {
-            if (ctx->pollfds[i].revents & POLLIN) {
-                ctx->readers[i].cb(
-                    ctx->readers[i].sock,
-                    ctx->readers[i].private_data);
-            }
-        }
+		for (i = 0; i < readers; i++) {
+			// Look for standard data inputs OR unexpected socket errors
+			if (ctx->pollfds[i].revents & (POLLIN | POLLERR | POLLHUP | POLLNVAL)) {
+				
+				// Execute the callback so the driving application layer knows 
+				// the socket died and can call aos_cancel_poll_read_fd()
+				ctx->readers[i].cb(
+					ctx->readers[i].sock,
+					ctx->readers[i].private_data);
+					
+				// Defensive backup: If the socket is deeply broken, force a small yield 
+				// to ensure we don't starve the scheduler if the app fails to deregister it.
+				if (ctx->pollfds[i].revents & (POLLERR | POLLHUP)) {
+					vTaskDelay(pdMS_TO_TICKS(5)); 
+				}
+			}
+		}
     }
 
     ctx->terminate = 0;
