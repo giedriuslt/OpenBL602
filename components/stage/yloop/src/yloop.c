@@ -247,6 +247,8 @@ void aos_loop_run(void)
         int delayed_ms = -1;
         int readers = ctx->reader_count;
         int i;
+		
+		aos_msleep(20);
 
         if (!dlist_empty(&ctx->timeouts)) {
             yloop_timeout_t *tmo = dlist_first_entry(&ctx->timeouts, yloop_timeout_t, next);
@@ -284,9 +286,20 @@ void aos_loop_run(void)
 
         int res = aos_poll(ctx->pollfds, readers, delayed_ms);
 
-        if (res < 0 && errno != EINTR) {
-            LOGE(TAG, "aos_poll");
-            return;
+        if (res < 0) {
+            if (errno != EINTR) {
+                LOGE(TAG, "aos_poll");
+            }
+            /*
+             * aos_poll returned without blocking (e.g. its poll semaphore
+             * could not be allocated under memory pressure). Do not return
+             * (which would permanently kill the loop) and do not loop again
+             * immediately (which would busy-spin and starve lower-priority
+             * tasks). Yield a tick so other tasks run and the heap can
+             * recover, then fall through: a due timeout below still fires,
+             * which may itself release memory.
+             */
+            aos_msleep(1);
         }
 
         /* check if some registered timeouts have occurred */

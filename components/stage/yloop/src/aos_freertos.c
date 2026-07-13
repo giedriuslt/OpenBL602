@@ -207,12 +207,12 @@ int aos_sem_new(aos_sem_t *sem, int count)
 {
     SemaphoreHandle_t s = xSemaphoreCreateCounting(128, count);
     sem->hdl = s;
-    return 0;
+    return s == NULL ? -1 : 0;
 }
 
 void aos_sem_free(aos_sem_t *sem)
 {
-    if (sem == NULL) {
+    if (sem == NULL || sem->hdl == NULL) {
         return;
     }
 

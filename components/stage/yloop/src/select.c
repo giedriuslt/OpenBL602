@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <limits.h>
 #include <string.h>
+#include <errno.h>
 #include <vfs_file.h>
 
 #if defined(__ICCARM__) || defined(__CC_ARM)
@@ -55,8 +56,7 @@ static int wait_io(int maxfd, fd_set *rfds, struct poll_arg *parg, int timeout)
 
 static int init_parg(struct poll_arg *parg)
 {
-    aos_sem_new(&parg->sem,  0);
-    return 0;
+    return aos_sem_new(&parg->sem,  0);
 }
 
 static void deinit_parg(struct poll_arg *parg)
@@ -139,6 +139,7 @@ int aos_poll(struct pollfd *fds, int nfds, int timeout)
     struct poll_arg parg;
 
     if (init_parg(&parg) < 0) {
+        errno = ENOMEM;
         return -1;
     }
 
