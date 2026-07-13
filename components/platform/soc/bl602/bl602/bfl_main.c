@@ -93,9 +93,6 @@ void __attribute__((weak)) vApplicationMallocFailedHook(void)
     printf("Memory Allocate Failed. Current left size is %d bytes\r\n",
         xPortGetFreeHeapSize()
     );
-    while (1) {
-        /*empty here*/
-    }
 }
 
 void __attribute__((weak)) vApplicationIdleHook(void)
