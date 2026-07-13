@@ -241,7 +241,7 @@ void aos_cancel_delayed_action(int ms, aos_call_t cb, void *private_data)
 void aos_loop_run(void)
 {
     yloop_ctx_t *ctx = get_context();
-
+    LOGE(TAG, "aos_loop_run enter");
     while (!ctx->terminate &&
            (!dlist_empty(&ctx->timeouts) || ctx->reader_count > 0)) {
         int delayed_ms = -1;
@@ -267,14 +267,14 @@ void aos_loop_run(void)
         static uint32_t loop_counter = 0;
         loop_counter++;
         
-        // Every 1000 iterations, check if we are looping too fast
-        if (loop_counter >= 1000) {
+        // Every 10 iterations, check if we are looping too fast
+        if (loop_counter >= 10) {
             uint32_t current_tick = xTaskGetTickCount();
             uint32_t duration_ms = (current_tick - last_log_tick) * portTICK_PERIOD_MS;
             
             // If 1000 loops took less than 100ms, yloop is spinning out of control!
             if (duration_ms < 100) {
-                LOGE(TAG, "CRITICAL: yloop is spinning! 1000 loops took only %lu ms. delayed_ms was %d, readers: %d", 
+                LOGE(TAG, "CRITICAL: yloop is spinning! 10 loops took only %lu ms. delayed_ms was %d, readers: %d", 
                      duration_ms, delayed_ms, readers);
             }
             
