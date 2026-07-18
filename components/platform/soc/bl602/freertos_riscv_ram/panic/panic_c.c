@@ -222,6 +222,7 @@ BaseType_t xPortIsInsideInterrupt( void )
     return TrapNetCounter ? 1 : 0;
 }
 
+#define CONF_ENABLE_FUNC_BACKTRACE_ELF 1
 
 #ifdef CONF_ENABLE_FUNC_BACKTRACE_ELF
 
