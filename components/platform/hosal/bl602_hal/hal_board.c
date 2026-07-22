@@ -143,10 +143,10 @@ static void update_mac_config_with_order(const void *fdt, int offset1, const cha
             {
                 if (0 == update_mac_config_get_mac_from_efuse(mac_addr)) {
                     set = 1;
-                    blog_debug("get MAC from B ready\r\n");
+                    blog_info("get MAC from B ready\r\n");
                     goto break_scan;
                 } else {
-                    blog_debug("get MAC from B failed\r\n");
+                    blog_info("get MAC from B failed\r\n");
                 }
             }
             break;
@@ -154,10 +154,10 @@ static void update_mac_config_with_order(const void *fdt, int offset1, const cha
             {
                 if (0 == update_mac_config_get_mac_from_dtb(fdt, offset1, mac_addr)) {
                     set = 1;
-                    blog_debug("get MAC from F ready\r\n");
+                    blog_info("get MAC from F ready\r\n");
                     goto break_scan;
                 } else {
-                    blog_debug("get MAC from F failed\r\n");
+                    blog_info("get MAC from F failed\r\n");
                 }
             }
             break;
@@ -165,10 +165,10 @@ static void update_mac_config_with_order(const void *fdt, int offset1, const cha
             {
                 if (0 == update_mac_config_get_mac_from_factory(mac_addr)) {
                     set = 1;
-                    blog_debug("get MAC from M ready\r\n");
+                    blog_info("get MAC from M ready\r\n");
                     goto break_scan;
                 } else {
-                    blog_debug("get MAC from M failed\r\n");
+                    blog_info("get MAC from M failed\r\n");
                 }
             }
             break;
@@ -275,10 +275,10 @@ static void update_xtal_config_with_order(const void *fdt, int offset1, const ch
             {
                 if (0 == update_xtal_config_get_mac_from_dtb(fdt, offset1, capcode)) {
                     set = 1;
-                    blog_debug("get xtal from F ready\r\n");
+                    blog_info("get xtal from F ready\r\n");
                     goto break_scan;
                 } else {
-                    blog_debug("get xtal from F failed\r\n");
+                    blog_info("get xtal from F failed\r\n");
                 }
             }
             break;
@@ -286,10 +286,10 @@ static void update_xtal_config_with_order(const void *fdt, int offset1, const ch
             {
                 if (0 == update_xtal_config_get_mac_from_factory(capcode)) {
                     set = 1;
-                    blog_debug("get xtal from M ready\r\n");
+                    blog_info("get xtal from M ready\r\n");
                     goto break_scan;
                 } else {
-                    blog_debug("get xtal from M failed\r\n");
+                    blog_info("get xtal from M failed\r\n");
                 }
             }
             break;
@@ -308,6 +308,7 @@ break_scan:
         capcode[3] = 60;
         capcode[4] = 60;
     }
+	blog_info("capcode data %u, %u, \r\n", capcode[0], capcode[1]);
     hal_sys_capcode_update(capcode[0], capcode[1]);
 }
 
