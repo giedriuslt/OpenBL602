@@ -1074,6 +1074,9 @@ static void stateConnectedIPNoEnter(void *stateData, struct event *event )
 
     stateConnectedIPNo_data = stateData;
     bl_os_printf(DEBUG_HEADER "Entering %s state\r\n", stateConnectedIPNo_data->name);
+
+    /* rate controller state was re-initialized for this association */
+    wifi_mgmr_rate_limit_connected_ind();
 #ifdef DEBUG_CONNECT_ABORT
     unsigned long now = bl_os_get_time_ms();
     bl_os_printf("Entering %s state, up time is %.1fs, cost time is %.1fs\r\n", (char *)stateData, now/1000.0, (now - wifiMgmr.connect_time)/1000.0);

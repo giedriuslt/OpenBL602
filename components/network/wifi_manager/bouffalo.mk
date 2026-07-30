@@ -27,6 +27,7 @@ COMPONENT_SRCS := bl60x_wifi_driver/ipc_host.c \
 				  bl60x_wifi_driver/wifi_mgmr_profile.c \
 				  bl60x_wifi_driver/wifi_netif.c \
 				  bl60x_wifi_driver/wifi_mgmr_event.c \
+				  bl60x_wifi_driver/wifi_mgmr_rate_limit.c \
 				  bl60x_wifi_driver/wifi_pkt_hooks.c
 
 COMPONENT_OBJS := $(patsubst %.c,%.o, $(COMPONENT_SRCS))

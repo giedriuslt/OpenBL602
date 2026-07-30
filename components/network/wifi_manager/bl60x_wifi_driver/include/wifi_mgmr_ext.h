@@ -281,6 +281,26 @@ int wifi_mgmr_ap_set_gateway(char *gateway);
 int wifi_mgmr_sniffer_enable(void);
 int wifi_mgmr_sniffer_disable(void);
 int wifi_mgmr_rate_config(uint16_t config);
+/*
+ * Cap the TX rates used by automatic rate control (BL602 only).
+ * Unlike wifi_mgmr_rate_config(), which pins one fixed rate, these keep rate
+ * adaption active but bound it from above. Caps persist across reconnects
+ * (re-applied on every CONNECTED indication) until cleared.
+ *
+ * max_ht_mcs:      highest 802.11n MCS allowed, 0..7, or WIFI_MGMR_RATE_LIMIT_NONE
+ * max_legacy_ridx: highest legacy rate index allowed, 0..11
+ *                  (0..3 = 1/2/5.5/11 Mbps CCK, 4..11 = 6/9/12/18/24/36/48/54 Mbps OFDM),
+ *                  or WIFI_MGMR_RATE_LIMIT_NONE
+ */
+#define WIFI_MGMR_RATE_LIMIT_NONE 0xFF
+int wifi_mgmr_rate_limit(uint8_t max_ht_mcs, uint8_t max_legacy_ridx);
+int wifi_mgmr_rate_limit_clear(void);
+int wifi_mgmr_rate_limit_get(uint8_t *max_ht_mcs, uint8_t *max_legacy_ridx);
+/* Apply the configured caps to one station entry (e.g. an AP-mode client
+ * from a CODE_WIFI_ON_AP_STA_ADD event handler). */
+int wifi_mgmr_rate_limit_apply_sta(uint8_t sta_idx);
+/* Internal: invoked by the manager state machine on (re)association. */
+void wifi_mgmr_rate_limit_connected_ind(void);
 int wifi_mgmr_conf_max_sta(uint8_t max_sta_supported);
 /* Easy API gives pointer to data directly. */
 int wifi_mgmr_sniffer_register(void *env, sniffer_cb_t cb);
