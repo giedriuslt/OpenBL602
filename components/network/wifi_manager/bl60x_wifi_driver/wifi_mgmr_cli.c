@@ -780,6 +780,34 @@ static void wifi_rc_fixed_disable(char *buf, int len, int argc, char **argv)
     wifi_mgmr_rate_config(rc);
 }
 
+static void wifi_rc_limit_cmd(char *buf, int len, int argc, char **argv)
+{
+    uint8_t mcs, ridx;
+
+    if (argc == 1) {
+        wifi_mgmr_rate_limit_get(&mcs, &ridx);
+        bl_os_printf("rate limit: max MCS %u, max legacy ridx %u (255 = no limit)\r\n", mcs, ridx);
+        return;
+    }
+    if (argc != 3) {
+        bl_os_printf("rc_limit [maxMCS 0-7|255] [maxLegacyIdx 0-11|255]\r\n");
+        return;
+    }
+    mcs = atoi(argv[1]);
+    ridx = atoi(argv[2]);
+    if (wifi_mgmr_rate_limit(mcs, ridx)) {
+        bl_os_printf("rc_limit: bad argument or not supported\r\n");
+    } else {
+        bl_os_printf("rate limit set: max MCS %u, max legacy ridx %u\r\n", mcs, ridx);
+    }
+}
+
+static void wifi_rc_limit_disable(char *buf, int len, int argc, char **argv)
+{
+    wifi_mgmr_rate_limit_clear();
+    bl_os_printf("rate limit cleared\r\n");
+}
+
 #if 0
 static void wifi_capcode_update(char *buf, int len, int argc, char **argv)
 {
@@ -1190,6 +1218,8 @@ const static struct cli_command cmds_user[] STATIC_CLI_CMD_ATTRIBUTE = {
         { "wifi_sta_autoconnect_disable", "wifi station disable auto reconnect", wifi_disable_autoreconnect_cmd},
         { "rc_fix_en", "wifi rate control fixed rate enable", wifi_rc_fixed_enable},
         { "rc_fix_dis", "wifi rate control fixed rate diable", wifi_rc_fixed_disable},
+        { "rc_limit", "cap wifi tx rates [maxMCS 0-7|255] [maxLegacyIdx 0-11|255]", wifi_rc_limit_cmd},
+        { "rc_limit_dis", "remove wifi tx rate cap", wifi_rc_limit_disable},
         { "wifi_sta_ps_on", "wifi power saving mode ON", wifi_power_saving_on_cmd},
         { "wifi_sta_ps_off", "wifi power saving mode OFF", wifi_power_saving_off_cmd},
         { "wifi_sta_ps_set", "set wifi ps mode active time", wifi_power_saving_set},
