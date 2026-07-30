@@ -38,7 +38,7 @@
 
 struct bl_mod_params bl_mod_params = {
     /* common parameters */
-    COMMON_PARAM(ht_on, true, true)
+    COMMON_PARAM(ht_on, false, false)
     COMMON_PARAM(vht_on, false, false)
     COMMON_PARAM(mcs_map, IEEE80211_VHT_MCS_SUPPORT_0_7, IEEE80211_VHT_MCS_SUPPORT_0_7)
     COMMON_PARAM(phy_cfg, 2, 2)
