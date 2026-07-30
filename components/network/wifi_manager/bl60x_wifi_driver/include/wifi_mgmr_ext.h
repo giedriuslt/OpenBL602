@@ -291,6 +291,12 @@ int wifi_mgmr_rate_config(uint16_t config);
  * max_legacy_ridx: highest legacy rate index allowed, 0..11
  *                  (0..3 = 1/2/5.5/11 Mbps CCK, 4..11 = 6/9/12/18/24/36/48/54 Mbps OFDM),
  *                  or WIFI_MGMR_RATE_LIMIT_NONE
+ *
+ * Asymmetric caps behave sensibly: the rate controller samples both formats
+ * and picks the best throughput within the caps (e.g. max_ht_mcs=0 with
+ * max_legacy_ridx=8 converges to 24 Mbps OFDM, not MCS0). One exception:
+ * on an 11n association to an AP without CCK basic rates (g-only config)
+ * the sampler never generates legacy candidates, so only the MCS cap acts.
  */
 #define WIFI_MGMR_RATE_LIMIT_NONE 0xFF
 int wifi_mgmr_rate_limit(uint8_t max_ht_mcs, uint8_t max_legacy_ridx);

@@ -30,9 +30,19 @@
 /* struct rc_sta_stats layout (from libwifi.a rc.o DWARF) */
 #define RC_STA_STATS_SIZEOF     200
 #define RC_STA_MAX              5    /* sizeof(sta_stats) / RC_STA_STATS_SIZEOF */
+#define RC_OFF_RATE_STATS       4    /* struct rc_rate_stats[10], the sample table */
 #define RC_OFF_MCS_MAX          184  /* uint8_t, highest HT MCS the sampler may pick */
 #define RC_OFF_R_IDX_MIN        185  /* uint8_t, lowest legacy rate index */
 #define RC_OFF_R_IDX_MAX        186  /* uint8_t, highest legacy rate index */
+#define RC_OFF_NO_SAMPLES       192  /* uint16_t, valid entries in the sample table */
+
+/* struct rc_rate_stats layout (12 bytes per entry) */
+#define RC_MAX_N_SAMPLE         10
+#define RC_ENTRY_SIZEOF         12
+#define RC_ENTRY_OFF_ATTEMPTS   0    /* uint16_t */
+#define RC_ENTRY_OFF_SUCCESS    2    /* uint16_t */
+#define RC_ENTRY_OFF_PROB       4    /* uint16_t, EWMA success probability */
+#define RC_ENTRY_OFF_RATE_CFG   6    /* uint16_t, rate word (format<<11|gi<<9|..|idx) */
 
 /* Legacy rate indices (HW_RATE_* enum in rc.o): 0..3 = 1/2/5.5/11 Mbps CCK,
  * 4..11 = 6/9/12/18/24/36/48/54 Mbps OFDM */
@@ -56,6 +66,64 @@ static uint8_t s_orig_valid[RC_STA_MAX];
 static inline uint8_t *rc_entry(uint8_t sta_idx)
 {
     return &sta_stats[(uint32_t)sta_idx * RC_STA_STATS_SIZEOF];
+}
+
+static inline uint16_t rc_rd16(uint8_t *p)
+{
+    return *(volatile uint16_t *)p;
+}
+
+static inline void rc_wr16(uint8_t *p, uint16_t v)
+{
+    *(volatile uint16_t *)p = v;
+}
+
+/* Clamp one rate word to the configured caps. Word layout (from rc.o):
+ * bits 13:11 = format (0/1 legacy, 2/3 HT), HT: bits 2:0 = MCS,
+ * legacy: bits 6:0 = rate index. */
+static uint16_t rc_cap_rate_word(uint16_t cfg)
+{
+    uint8_t format = (cfg >> 11) & 0x7;
+
+    if (format >= 2) {
+        if (s_cap_mcs != WIFI_MGMR_RATE_LIMIT_NONE && (cfg & 0x7) > s_cap_mcs) {
+            return (cfg & ~(uint16_t)0x7) | s_cap_mcs;
+        }
+    } else {
+        if (s_cap_ridx != WIFI_MGMR_RATE_LIMIT_NONE && (cfg & 0x7f) > s_cap_ridx) {
+            return (cfg & ~(uint16_t)0x7f) | s_cap_ridx;
+        }
+    }
+    return cfg;
+}
+
+/* The bounds only constrain rates the sampler generates from now on.
+ * Entries already in the sample table can sit above the cap (rc_init seeds
+ * the highest rate_map MCS regardless of mcs_max, and table rebuilds keep
+ * the two best-throughput rates), and on a good link such an entry keeps
+ * winning forever. Rewrite them in place to a capped rate and reset their
+ * stats so the retry chain re-converges below the cap within a few rate
+ * control windows. */
+static void rc_cap_sample_table(uint8_t *st)
+{
+    uint16_t n = rc_rd16(st + RC_OFF_NO_SAMPLES);
+    uint16_t i;
+
+    if (n > RC_MAX_N_SAMPLE) {
+        n = RC_MAX_N_SAMPLE;
+    }
+    for (i = 0; i < n; i++) {
+        uint8_t *e = st + RC_OFF_RATE_STATS + i * RC_ENTRY_SIZEOF;
+        uint16_t cfg = rc_rd16(e + RC_ENTRY_OFF_RATE_CFG);
+        uint16_t capped = rc_cap_rate_word(cfg);
+
+        if (capped != cfg) {
+            rc_wr16(e + RC_ENTRY_OFF_RATE_CFG, capped);
+            rc_wr16(e + RC_ENTRY_OFF_ATTEMPTS, 0);
+            rc_wr16(e + RC_ENTRY_OFF_SUCCESS, 0);
+            rc_wr16(e + RC_ENTRY_OFF_PROB, 0);
+        }
+    }
 }
 
 int wifi_mgmr_rate_limit_apply_sta(uint8_t sta_idx)
@@ -92,6 +160,10 @@ int wifi_mgmr_rate_limit_apply_sta(uint8_t sta_idx)
     /* single-byte stores: safe against the Wi-Fi task reading concurrently */
     st[RC_OFF_MCS_MAX] = mcs;
     st[RC_OFF_R_IDX_MAX] = ridx;
+
+    if (s_cap_mcs != WIFI_MGMR_RATE_LIMIT_NONE || s_cap_ridx != WIFI_MGMR_RATE_LIMIT_NONE) {
+        rc_cap_sample_table(st);
+    }
 
     return 0;
 }
