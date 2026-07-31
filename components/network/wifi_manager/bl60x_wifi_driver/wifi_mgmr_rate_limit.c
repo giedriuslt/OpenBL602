@@ -49,13 +49,32 @@
 #define RC_LEGACY_RIDX_MAX      11
 #define RC_HT_MCS_MAX           7
 
+/* struct sta_info_tag / struct vif_info_tag (from libwifi.a disassembly).
+ * me_update_buffer_control() in me_utils.o recomputes mcs_max and
+ * rate_map.ht from the VIF's negotiated HT MCS mask after every retry
+ * chain update (~100 ms under traffic), which silently reverts any clamp
+ * written only to rc_sta_stats. The mask itself is written by the
+ * connection state machine (sm.o) during association only, so clamping
+ * it makes every recomputation reproduce the cap. */
+#define STA_INFO_TAG_SIZEOF     368
+#define STA_INFO_OFF_VIF_IDX    39   /* uint8_t, 0xFF = no vif */
+#define VIF_INFO_TAG_SIZEOF     1512
+#define VIF_INFO_OFF_HT_MCS_MASK 347 /* bss_info: HT MCS0-7 mask for 1SS */
+#define VIF_MAX                 2    /* NX_VIRT_DEV_MAX */
+
 /* Per-station rate controller state owned by libwifi.a(rc.o) */
 extern uint8_t sta_stats[];
+extern uint8_t sta_info_tab[];
+extern uint8_t vif_info_tab[];
 
 extern struct bl_hw wifi_hw;
 
 static uint8_t s_cap_mcs = WIFI_MGMR_RATE_LIMIT_NONE;
 static uint8_t s_cap_ridx = WIFI_MGMR_RATE_LIMIT_NONE;
+
+/* original VIF HT MCS mask, saved before the first clamp */
+static uint8_t s_orig_vif_mask[VIF_MAX];
+static uint8_t s_orig_vif_valid[VIF_MAX];
 
 /* Bounds computed by rc_init for the current association, saved before the
  * first clamp so the cap can be lifted without a reconnect. */
@@ -126,6 +145,35 @@ static void rc_cap_sample_table(uint8_t *st)
     }
 }
 
+/* Clamp (or restore) the VIF's negotiated HT MCS mask that
+ * me_update_buffer_control() derives mcs_max / rate_map.ht from. */
+static void rc_cap_vif_mcs_mask(uint8_t sta_idx)
+{
+    uint8_t vif = sta_info_tab[(uint32_t)sta_idx * STA_INFO_TAG_SIZEOF + STA_INFO_OFF_VIF_IDX];
+    uint8_t *mask;
+    uint8_t capped;
+
+    if (vif >= VIF_MAX) {
+        return;
+    }
+    mask = &vif_info_tab[(uint32_t)vif * VIF_INFO_TAG_SIZEOF + VIF_INFO_OFF_HT_MCS_MASK];
+
+    if (!s_orig_vif_valid[vif]) {
+        s_orig_vif_mask[vif] = *mask;
+        s_orig_vif_valid[vif] = 1;
+    }
+
+    if (s_cap_mcs != WIFI_MGMR_RATE_LIMIT_NONE) {
+        capped = s_orig_vif_mask[vif] & (uint8_t)((2u << s_cap_mcs) - 1);
+        if (capped == 0) {
+            capped = 0x01; /* never leave the mask empty: keep MCS0 */
+        }
+    } else {
+        capped = s_orig_vif_mask[vif];
+    }
+    *mask = capped;
+}
+
 int wifi_mgmr_rate_limit_apply_sta(uint8_t sta_idx)
 {
     uint8_t *st;
@@ -165,6 +213,9 @@ int wifi_mgmr_rate_limit_apply_sta(uint8_t sta_idx)
         rc_cap_sample_table(st);
     }
 
+    /* keep me_update_buffer_control() from reverting the MCS clamp */
+    rc_cap_vif_mcs_mask(sta_idx);
+
     return 0;
 }
 
@@ -194,6 +245,7 @@ int wifi_mgmr_rate_limit_clear(void)
         uint8_t *st = rc_entry(sta_idx);
         st[RC_OFF_MCS_MAX] = s_orig_mcs[sta_idx];
         st[RC_OFF_R_IDX_MAX] = s_orig_ridx[sta_idx];
+        rc_cap_vif_mcs_mask(sta_idx); /* caps cleared: restores the mask */
     }
     return 0;
 }
@@ -211,9 +263,11 @@ int wifi_mgmr_rate_limit_get(uint8_t *max_ht_mcs, uint8_t *max_legacy_ridx)
 
 void wifi_mgmr_rate_limit_connected_ind(void)
 {
-    /* rc_init has just rebuilt the bounds for the new association: the old
+    /* rc_init has just rebuilt the bounds for the new association and the
+     * connection state machine rewrote the VIF's BSS info: the old
      * snapshots are stale and the caps (if any) must be applied again. */
     memset(s_orig_valid, 0, sizeof(s_orig_valid));
+    memset(s_orig_vif_valid, 0, sizeof(s_orig_vif_valid));
 
     if (s_cap_mcs != WIFI_MGMR_RATE_LIMIT_NONE || s_cap_ridx != WIFI_MGMR_RATE_LIMIT_NONE) {
         wifi_mgmr_rate_limit_apply_sta(wifi_hw.sta_idx);
