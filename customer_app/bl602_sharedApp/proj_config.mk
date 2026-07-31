@@ -20,6 +20,9 @@ CONFIG_BL_IOT_FW_CONN_DIAG_TLV:=1
 CONFIG_BL_IOT_FW_AP:=1
 CONFIG_BL_IOT_FW_AMPDU:=0
 CONFIG_BL_IOT_FW_AMSDU:=0
+#force long guard interval on wifi tx (short GI gains ~11% peak rate but is
+#the most fragile PHY option; not worth it for an IoT device)
+CONFIG_WIFI_TX_SGI_DISABLE:=1
 CONFIG_BL_IOT_FW_P2P:=0
 CONFIG_ENABLE_PSM_RAM:=1
 CONFIG_CLI_CMD_ENABLE:=0

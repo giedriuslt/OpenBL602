@@ -73,7 +73,13 @@ extern struct bl_hw wifi_hw;
 
 static uint8_t s_cap_mcs = WIFI_MGMR_RATE_LIMIT_NONE;
 static uint8_t s_cap_ridx = WIFI_MGMR_RATE_LIMIT_NONE;
+/* Build with CONFIG_WIFI_TX_SGI_DISABLE:=1 (proj_config.mk) to force long
+ * GI on TX from boot; wifi_mgmr_rate_limit_sgi_tx() can still override. */
+#ifdef CONF_WIFI_TX_SGI_DISABLE
+static uint8_t s_sgi_tx_disabled = 1;
+#else
 static uint8_t s_sgi_tx_disabled = 0;
+#endif
 
 /* original VIF HT MCS mask, saved before the first clamp */
 static uint8_t s_orig_vif_mask[VIF_MAX];
