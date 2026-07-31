@@ -808,6 +808,19 @@ static void wifi_rc_limit_disable(char *buf, int len, int argc, char **argv)
     bl_os_printf("rate limit cleared\r\n");
 }
 
+static void wifi_rc_sgi_cmd(char *buf, int len, int argc, char **argv)
+{
+    if (argc != 2) {
+        bl_os_printf("rc_sgi_tx [0/1] - forbid/allow short GI on TX\r\n");
+        return;
+    }
+    if (wifi_mgmr_rate_limit_sgi_tx(atoi(argv[1]))) {
+        bl_os_printf("rc_sgi_tx: not supported\r\n");
+    } else {
+        bl_os_printf("TX short GI %s\r\n", atoi(argv[1]) ? "allowed" : "forbidden");
+    }
+}
+
 #if 0
 static void wifi_capcode_update(char *buf, int len, int argc, char **argv)
 {
@@ -1220,6 +1233,7 @@ const static struct cli_command cmds_user[] STATIC_CLI_CMD_ATTRIBUTE = {
         { "rc_fix_dis", "wifi rate control fixed rate diable", wifi_rc_fixed_disable},
         { "rc_limit", "cap wifi tx rates [maxMCS 0-7|255] [maxLegacyIdx 0-11|255]", wifi_rc_limit_cmd},
         { "rc_limit_dis", "remove wifi tx rate cap", wifi_rc_limit_disable},
+        { "rc_sgi_tx", "allow short GI on wifi tx [0/1]", wifi_rc_sgi_cmd},
         { "wifi_sta_ps_on", "wifi power saving mode ON", wifi_power_saving_on_cmd},
         { "wifi_sta_ps_off", "wifi power saving mode OFF", wifi_power_saving_off_cmd},
         { "wifi_sta_ps_set", "set wifi ps mode active time", wifi_power_saving_set},

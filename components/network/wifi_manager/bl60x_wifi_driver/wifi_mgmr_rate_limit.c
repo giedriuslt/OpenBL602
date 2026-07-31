@@ -34,6 +34,8 @@
 #define RC_OFF_MCS_MAX          184  /* uint8_t, highest HT MCS the sampler may pick */
 #define RC_OFF_R_IDX_MIN        185  /* uint8_t, lowest legacy rate index */
 #define RC_OFF_R_IDX_MAX        186  /* uint8_t, highest legacy rate index */
+#define RC_OFF_SHORT_GI         189  /* uint8_t, TX SGI allowed (set by rc_init from
+                                        the AP's HT capability, its only writer) */
 #define RC_OFF_NO_SAMPLES       192  /* uint16_t, valid entries in the sample table */
 
 /* struct rc_rate_stats layout (12 bytes per entry) */
@@ -71,6 +73,7 @@ extern struct bl_hw wifi_hw;
 
 static uint8_t s_cap_mcs = WIFI_MGMR_RATE_LIMIT_NONE;
 static uint8_t s_cap_ridx = WIFI_MGMR_RATE_LIMIT_NONE;
+static uint8_t s_sgi_tx_disabled = 0;
 
 /* original VIF HT MCS mask, saved before the first clamp */
 static uint8_t s_orig_vif_mask[VIF_MAX];
@@ -80,7 +83,15 @@ static uint8_t s_orig_vif_valid[VIF_MAX];
  * first clamp so the cap can be lifted without a reconnect. */
 static uint8_t s_orig_mcs[RC_STA_MAX];
 static uint8_t s_orig_ridx[RC_STA_MAX];
+static uint8_t s_orig_sgi[RC_STA_MAX];
 static uint8_t s_orig_valid[RC_STA_MAX];
+
+static inline int rate_limit_active(void)
+{
+    return s_cap_mcs != WIFI_MGMR_RATE_LIMIT_NONE ||
+           s_cap_ridx != WIFI_MGMR_RATE_LIMIT_NONE ||
+           s_sgi_tx_disabled;
+}
 
 static inline uint8_t *rc_entry(uint8_t sta_idx)
 {
@@ -98,19 +109,22 @@ static inline void rc_wr16(uint8_t *p, uint16_t v)
 }
 
 /* Clamp one rate word to the configured caps. Word layout (from rc.o):
- * bits 13:11 = format (0/1 legacy, 2/3 HT), HT: bits 2:0 = MCS,
- * legacy: bits 6:0 = rate index. */
+ * bits 13:11 = format (0/1 legacy, 2/3 HT), bit 9 = short GI (HT),
+ * HT: bits 2:0 = MCS, legacy: bits 6:0 = rate index. */
 static uint16_t rc_cap_rate_word(uint16_t cfg)
 {
     uint8_t format = (cfg >> 11) & 0x7;
 
     if (format >= 2) {
+        if (s_sgi_tx_disabled) {
+            cfg &= ~(uint16_t)0x200;
+        }
         if (s_cap_mcs != WIFI_MGMR_RATE_LIMIT_NONE && (cfg & 0x7) > s_cap_mcs) {
-            return (cfg & ~(uint16_t)0x7) | s_cap_mcs;
+            cfg = (cfg & ~(uint16_t)0x7) | s_cap_mcs;
         }
     } else {
         if (s_cap_ridx != WIFI_MGMR_RATE_LIMIT_NONE && (cfg & 0x7f) > s_cap_ridx) {
-            return (cfg & ~(uint16_t)0x7f) | s_cap_ridx;
+            cfg = (cfg & ~(uint16_t)0x7f) | s_cap_ridx;
         }
     }
     return cfg;
@@ -187,6 +201,7 @@ int wifi_mgmr_rate_limit_apply_sta(uint8_t sta_idx)
     if (!s_orig_valid[sta_idx]) {
         s_orig_mcs[sta_idx] = st[RC_OFF_MCS_MAX];
         s_orig_ridx[sta_idx] = st[RC_OFF_R_IDX_MAX];
+        s_orig_sgi[sta_idx] = st[RC_OFF_SHORT_GI];
         s_orig_valid[sta_idx] = 1;
     }
 
@@ -208,8 +223,9 @@ int wifi_mgmr_rate_limit_apply_sta(uint8_t sta_idx)
     /* single-byte stores: safe against the Wi-Fi task reading concurrently */
     st[RC_OFF_MCS_MAX] = mcs;
     st[RC_OFF_R_IDX_MAX] = ridx;
+    st[RC_OFF_SHORT_GI] = s_sgi_tx_disabled ? 0 : s_orig_sgi[sta_idx];
 
-    if (s_cap_mcs != WIFI_MGMR_RATE_LIMIT_NONE || s_cap_ridx != WIFI_MGMR_RATE_LIMIT_NONE) {
+    if (rate_limit_active()) {
         rc_cap_sample_table(st);
     }
 
@@ -261,6 +277,12 @@ int wifi_mgmr_rate_limit_get(uint8_t *max_ht_mcs, uint8_t *max_legacy_ridx)
     return 0;
 }
 
+int wifi_mgmr_rate_limit_sgi_tx(uint8_t enable)
+{
+    s_sgi_tx_disabled = enable ? 0 : 1;
+    return wifi_mgmr_rate_limit_apply_sta(wifi_hw.sta_idx);
+}
+
 void wifi_mgmr_rate_limit_connected_ind(void)
 {
     /* rc_init has just rebuilt the bounds for the new association and the
@@ -269,10 +291,10 @@ void wifi_mgmr_rate_limit_connected_ind(void)
     memset(s_orig_valid, 0, sizeof(s_orig_valid));
     memset(s_orig_vif_valid, 0, sizeof(s_orig_vif_valid));
 
-    if (s_cap_mcs != WIFI_MGMR_RATE_LIMIT_NONE || s_cap_ridx != WIFI_MGMR_RATE_LIMIT_NONE) {
+    if (rate_limit_active()) {
         wifi_mgmr_rate_limit_apply_sta(wifi_hw.sta_idx);
-        bl_os_printf("[RC] rate limit applied: max MCS %u, max legacy ridx %u\r\n",
-                s_cap_mcs, s_cap_ridx);
+        bl_os_printf("[RC] rate limit applied: max MCS %u, max legacy ridx %u, TX SGI %s\r\n",
+                s_cap_mcs, s_cap_ridx, s_sgi_tx_disabled ? "off" : "on");
     }
 }
 
@@ -302,6 +324,12 @@ int wifi_mgmr_rate_limit_get(uint8_t *max_ht_mcs, uint8_t *max_legacy_ridx)
 {
     (void)max_ht_mcs;
     (void)max_legacy_ridx;
+    return -1;
+}
+
+int wifi_mgmr_rate_limit_sgi_tx(uint8_t enable)
+{
+    (void)enable;
     return -1;
 }
 

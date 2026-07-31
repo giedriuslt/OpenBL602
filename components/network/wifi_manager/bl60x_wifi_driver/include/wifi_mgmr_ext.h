@@ -302,6 +302,11 @@ int wifi_mgmr_rate_config(uint16_t config);
 int wifi_mgmr_rate_limit(uint8_t max_ht_mcs, uint8_t max_legacy_ridx);
 int wifi_mgmr_rate_limit_clear(void);
 int wifi_mgmr_rate_limit_get(uint8_t *max_ht_mcs, uint8_t *max_legacy_ridx);
+/* Allow/forbid short guard interval on transmitted HT frames (BL602 only).
+ * By default TX SGI follows the AP's advertised capability; enable=0 forces
+ * long GI on TX. Independent of the rate caps: not affected by
+ * wifi_mgmr_rate_limit_clear(), persists across reconnects until re-enabled. */
+int wifi_mgmr_rate_limit_sgi_tx(uint8_t enable);
 /* Apply the configured caps to one station entry (e.g. an AP-mode client
  * from a CODE_WIFI_ON_AP_STA_ADD event handler). */
 int wifi_mgmr_rate_limit_apply_sta(uint8_t sta_idx);
