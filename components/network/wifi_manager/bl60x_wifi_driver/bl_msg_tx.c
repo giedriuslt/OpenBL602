@@ -485,9 +485,9 @@ int bl_send_me_config_req(struct bl_hw *bl_hw)
     }
 
     /* Set parameters for the ME_CONFIG_REQ message */
-    bl_os_printf("[ME] HT supp %d, VHT supp %d\r\n", 1, 0);
+    bl_os_printf("[ME] HT supp %d, VHT supp %d\r\n", bl_hw->mod_params->ht_on, 0);
 
-    req->ht_supp = 1;
+    req->ht_supp = bl_hw->mod_params->ht_on;
     req->vht_supp = 0;
     req->ht_cap.ht_capa_info = cpu_to_le16(bl_hw->ht_cap.cap);
 
