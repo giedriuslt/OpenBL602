@@ -785,8 +785,13 @@ static void wifi_rc_limit_cmd(char *buf, int len, int argc, char **argv)
     uint8_t mcs, ridx;
 
     if (argc == 1) {
+        uint8_t ldpc_tx, ldpc_rx;
+
         wifi_mgmr_rate_limit_get(&mcs, &ridx);
         bl_os_printf("rate limit: max MCS %u, max legacy ridx %u (255 = no limit)\r\n", mcs, ridx);
+        if (0 == wifi_mgmr_rate_limit_ldpc_info(&ldpc_tx, &ldpc_rx)) {
+            bl_os_printf("modem hw: LDPC tx %u, LDPC rx %u\r\n", ldpc_tx, ldpc_rx);
+        }
         return;
     }
     if (argc != 3) {

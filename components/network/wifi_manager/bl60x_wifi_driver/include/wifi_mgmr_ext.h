@@ -307,6 +307,9 @@ int wifi_mgmr_rate_limit_get(uint8_t *max_ht_mcs, uint8_t *max_legacy_ridx);
  * long GI on TX. Independent of the rate caps: not affected by
  * wifi_mgmr_rate_limit_clear(), persists across reconnects until re-enabled. */
 int wifi_mgmr_rate_limit_sgi_tx(uint8_t enable);
+/* Report whether the modem hardware has LDPC encode (TX) / decode (RX)
+ * support (BL602 only; reads the modem HDMCONFIG capability register). */
+int wifi_mgmr_rate_limit_ldpc_info(uint8_t *ldpc_tx, uint8_t *ldpc_rx);
 /* Apply the configured caps to one station entry (e.g. an AP-mode client
  * from a CODE_WIFI_ON_AP_STA_ADD event handler). */
 int wifi_mgmr_rate_limit_apply_sta(uint8_t sta_idx);

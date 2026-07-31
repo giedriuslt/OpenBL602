@@ -289,6 +289,21 @@ int wifi_mgmr_rate_limit_sgi_tx(uint8_t enable)
     return wifi_mgmr_rate_limit_apply_sta(wifi_hw.sta_idx);
 }
 
+/* Modem hardware capability bits (HDMCONFIG), via the blob's own probes */
+extern int phy_ldpc_tx_supported(void);
+extern int phy_ldpc_rx_supported(void);
+
+int wifi_mgmr_rate_limit_ldpc_info(uint8_t *ldpc_tx, uint8_t *ldpc_rx)
+{
+    if (ldpc_tx) {
+        *ldpc_tx = phy_ldpc_tx_supported() ? 1 : 0;
+    }
+    if (ldpc_rx) {
+        *ldpc_rx = phy_ldpc_rx_supported() ? 1 : 0;
+    }
+    return 0;
+}
+
 void wifi_mgmr_rate_limit_connected_ind(void)
 {
     /* rc_init has just rebuilt the bounds for the new association and the
@@ -336,6 +351,13 @@ int wifi_mgmr_rate_limit_get(uint8_t *max_ht_mcs, uint8_t *max_legacy_ridx)
 int wifi_mgmr_rate_limit_sgi_tx(uint8_t enable)
 {
     (void)enable;
+    return -1;
+}
+
+int wifi_mgmr_rate_limit_ldpc_info(uint8_t *ldpc_tx, uint8_t *ldpc_rx)
+{
+    (void)ldpc_tx;
+    (void)ldpc_rx;
     return -1;
 }
 
