@@ -40,6 +40,27 @@
 
 struct utils_list tx_list_bl;
 
+/* Per-packet TX confirmation counters (originally an OpenBeken override of
+ * this file), read by the WifiTxStats command in the app.
+ * A retry-limit event means one frame exhausted its whole MAC retry chain
+ * (all rate steps) - rare on a healthy link, a stream of them means a bad
+ * RF link. Every such frame is requeued unless the 8-slot txhdr_hodler
+ * ring is full, so g_obkTxRequeued tracks g_obkTxRetryLimit and
+ * g_obkTxDropped only moves on an overflow burst.
+ *
+ * NOTE: g_obkTxCfmOkRetried can never increment with the stock libwifi.a:
+ * the firmware confirmation path (txu_cntrl_cfm) only ever sets bit 0
+ * (done) or bit 16 (retry limit reached) in the status word - the
+ * retry_required / sw_retry_required bits of union bl_hw_txstatus are
+ * vestigial from the Linux rwnx driver and are never written. Per-rate
+ * retry visibility is available from the rate controller instead, see
+ * the rc_stats CLI command (wifi_mgmr_rc_stats_dump). */
+volatile uint32_t g_obkTxCfmOk = 0;         /* frames confirmed sent */
+volatile uint32_t g_obkTxCfmOkRetried = 0;  /* dead with stock fw, see note above */
+volatile uint32_t g_obkTxRetryLimit = 0;    /* frames that hit the MAC retry limit */
+volatile uint32_t g_obkTxRequeued = 0;      /* retry-limit frames requeued for resend */
+volatile uint32_t g_obkTxDropped = 0;       /* retry-limit frames dropped (holder full) */
+
 int internel_cal_size_tx_hdr = sizeof(struct bl_txhdr);
 
 extern struct bl_hw wifi_hw;
@@ -163,16 +184,23 @@ int bl_txdatacfm(void *pthis, void *host_id)
         bl_os_printf("TX STATUS %08lX", bl_txst.value);
         bl_os_printf(" Retry reached %p:%lu:%lu", txhdr, txhdr_pos_r, txhdr_pos_w);
 #endif
+        g_obkTxRetryLimit++;
         /*we don't pbuf_free here, because we will resend this packet*/
         if (((txhdr_pos_w + 1) & TXHDR_HODLER_MSK) != (txhdr_pos_r & TXHDR_HODLER_MSK)) {
             bl_os_log_warn(" push back\r\n");
             txhdr_hodler[txhdr_pos_w & TXHDR_HODLER_MSK] = txhdr;
             txhdr_pos_w++;
+            g_obkTxRequeued++;
         } else {
             bl_os_log_warn(" NOT push back when no mem\r\n");
             pbuf_free(p);
+            g_obkTxDropped++;
         }
     } else {
+        g_obkTxCfmOk++;
+        if (bl_txst.retry_required || bl_txst.sw_retry_required) {
+            g_obkTxCfmOkRetried++;
+        }
         pbuf_free(p);
         return 1;
     }

@@ -289,6 +289,68 @@ int wifi_mgmr_rate_limit_sgi_tx(uint8_t enable)
     return wifi_mgmr_rate_limit_apply_sta(wifi_hw.sta_idx);
 }
 
+/* additional rc_sta_stats offsets used by the stats dump */
+#define RC_OFF_RETRY_CHAIN      124  /* struct {uint32_t tp; uint16_t idx;}[4], 8B step */
+#define RC_OFF_AVG_AMPDU_LEN    168  /* uint32_t, 16.16 fixed point */
+#define RC_OFF_FIXED_RATE_CFG   198  /* uint16_t, 0xFFFF = auto */
+#define RC_ENTRY_OFF_SAMPLE_SKIPPED 8 /* uint8_t */
+
+/* Dump the live rate controller sample table. The status word handed to
+ * the host never reports MAC retries (see bl_tx.c), but the controller's
+ * per-rate stats do: probability is the EWMA of success/attempts, i.e.
+ * 100% means first-try success, lower means retries are burning airtime. */
+int wifi_mgmr_rc_stats_dump(void)
+{
+    /* legacy rate in units of 0.5 Mbps, indexed by HW_RATE_* */
+    static const uint16_t legacy_halfmbps[12] = {2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108};
+    uint8_t sta_idx = wifi_hw.sta_idx;
+    uint8_t *st;
+    uint16_t n, i, s;
+    uint32_t avg;
+
+    if (sta_idx >= RC_STA_MAX) {
+        return -1;
+    }
+    st = rc_entry(sta_idx);
+    n = rc_rd16(st + RC_OFF_NO_SAMPLES);
+    if (n > RC_MAX_N_SAMPLE) {
+        n = RC_MAX_N_SAMPLE;
+    }
+    avg = *(volatile uint32_t *)(st + RC_OFF_AVG_AMPDU_LEN);
+
+    bl_os_printf("rc sta%u: bounds mcs<=%u ridx %u..%u sgi %u fixed %04x avg_ampdu %u.%02u\r\n",
+            sta_idx, st[RC_OFF_MCS_MAX], st[RC_OFF_R_IDX_MIN], st[RC_OFF_R_IDX_MAX],
+            st[RC_OFF_SHORT_GI], rc_rd16(st + RC_OFF_FIXED_RATE_CFG),
+            (unsigned)(avg >> 16), (unsigned)(((avg & 0xffff) * 100) >> 16));
+
+    for (i = 0; i < n; i++) {
+        uint8_t *e = st + RC_OFF_RATE_STATS + i * RC_ENTRY_SIZEOF;
+        uint16_t cfg = rc_rd16(e + RC_ENTRY_OFF_RATE_CFG);
+        uint16_t att = rc_rd16(e + RC_ENTRY_OFF_ATTEMPTS);
+        uint16_t ok = rc_rd16(e + RC_ENTRY_OFF_SUCCESS);
+        uint32_t prob = ((uint32_t)rc_rd16(e + RC_ENTRY_OFF_PROB) * 100) >> 16;
+        char step = ' ';
+
+        for (s = 0; s < 4; s++) {
+            if (rc_rd16(st + RC_OFF_RETRY_CHAIN + s * 8 + 4) == i) {
+                step = '0' + s;
+                break;
+            }
+        }
+        if (((cfg >> 11) & 0x7) >= 2) {
+            bl_os_printf(" [%2u]%c MCS%u%s      att %5u ok %5u prob %3u%% skip %u\r\n",
+                    i, step, cfg & 0x7, (cfg & 0x200) ? "-SGI" : "    ",
+                    att, ok, (unsigned)prob, e[RC_ENTRY_OFF_SAMPLE_SKIPPED]);
+        } else {
+            uint16_t half = (cfg & 0x7f) < 12 ? legacy_halfmbps[cfg & 0x7f] : 0;
+            bl_os_printf(" [%2u]%c L%-2u %2u.%uM    att %5u ok %5u prob %3u%% skip %u\r\n",
+                    i, step, cfg & 0x7f, half / 2, (half & 1) * 5,
+                    att, ok, (unsigned)prob, e[RC_ENTRY_OFF_SAMPLE_SKIPPED]);
+        }
+    }
+    return 0;
+}
+
 /* Modem hardware capability bits (HDMCONFIG), via the blob's own probes */
 extern int phy_ldpc_tx_supported(void);
 extern int phy_ldpc_rx_supported(void);
@@ -358,6 +420,11 @@ int wifi_mgmr_rate_limit_ldpc_info(uint8_t *ldpc_tx, uint8_t *ldpc_rx)
 {
     (void)ldpc_tx;
     (void)ldpc_rx;
+    return -1;
+}
+
+int wifi_mgmr_rc_stats_dump(void)
+{
     return -1;
 }
 

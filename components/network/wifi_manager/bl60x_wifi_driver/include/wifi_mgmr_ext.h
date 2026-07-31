@@ -310,6 +310,12 @@ int wifi_mgmr_rate_limit_sgi_tx(uint8_t enable);
 /* Report whether the modem hardware has LDPC encode (TX) / decode (RX)
  * support (BL602 only; reads the modem HDMCONFIG capability register). */
 int wifi_mgmr_rate_limit_ldpc_info(uint8_t *ldpc_tx, uint8_t *ldpc_rx);
+/* Dump the rate controller's live sample table (BL602 only): per rate
+ * attempts/success/EWMA probability plus retry chain membership. This is
+ * the only retry visibility available - the TX confirmation status never
+ * reports MAC retries. Counters are windowed (~100 ms), probability is
+ * the long-run first-try success rate. CLI: rc_stats. */
+int wifi_mgmr_rc_stats_dump(void);
 /* Apply the configured caps to one station entry (e.g. an AP-mode client
  * from a CODE_WIFI_ON_AP_STA_ADD event handler). */
 int wifi_mgmr_rate_limit_apply_sta(uint8_t sta_idx);
