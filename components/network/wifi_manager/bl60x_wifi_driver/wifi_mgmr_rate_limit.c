@@ -36,6 +36,7 @@
 #define RC_OFF_R_IDX_MAX        186  /* uint8_t, highest legacy rate index */
 #define RC_OFF_SHORT_GI         189  /* uint8_t, TX SGI allowed (set by rc_init from
                                         the AP's HT capability, its only writer) */
+#define RC_OFF_FORMAT_MOD       177  /* uint8_t, 0/1 legacy assoc, 2/3 HT assoc */
 #define RC_OFF_NO_SAMPLES       192  /* uint16_t, valid entries in the sample table */
 
 /* struct rc_rate_stats layout (12 bytes per entry) */
@@ -194,6 +195,21 @@ static void rc_cap_vif_mcs_mask(uint8_t sta_idx)
     *mask = capped;
 }
 
+/* On an 11n association to an AP without CCK basic rates (e.g. OpenWrt
+ * with legacy_rates disabled) the sampler never generates legacy
+ * candidates: the gate in rc_new_random_rate (and the trial path in
+ * rc_check) requires r_idx_min <= HW_RATE_11MBPS. Lower r_idx_min to 3
+ * to open the gate; this is safe because the rate_map_l membership check
+ * snaps unsupported CCK indices to r_idx_max, and rc_get_lowest_rate_config
+ * only selects DSSS as the fallback when r_idx_min == 0. Legacy OFDM
+ * rates then compete with MCS exactly as they do on 11b-enabled APs. */
+static void rc_open_legacy_sampling(uint8_t *st)
+{
+    if (st[RC_OFF_FORMAT_MOD] >= 2 && st[RC_OFF_R_IDX_MIN] > 3) {
+        st[RC_OFF_R_IDX_MIN] = 3;
+    }
+}
+
 int wifi_mgmr_rate_limit_apply_sta(uint8_t sta_idx)
 {
     uint8_t *st;
@@ -203,6 +219,7 @@ int wifi_mgmr_rate_limit_apply_sta(uint8_t sta_idx)
         return -1;
     }
     st = rc_entry(sta_idx);
+    rc_open_legacy_sampling(st);
 
     if (!s_orig_valid[sta_idx]) {
         s_orig_mcs[sta_idx] = st[RC_OFF_MCS_MAX];
@@ -373,6 +390,10 @@ void wifi_mgmr_rate_limit_connected_ind(void)
      * snapshots are stale and the caps (if any) must be applied again. */
     memset(s_orig_valid, 0, sizeof(s_orig_valid));
     memset(s_orig_vif_valid, 0, sizeof(s_orig_vif_valid));
+
+    if (wifi_hw.sta_idx < RC_STA_MAX) {
+        rc_open_legacy_sampling(rc_entry(wifi_hw.sta_idx));
+    }
 
     if (rate_limit_active()) {
         wifi_mgmr_rate_limit_apply_sta(wifi_hw.sta_idx);
