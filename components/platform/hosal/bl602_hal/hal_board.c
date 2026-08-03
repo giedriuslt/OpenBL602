@@ -1012,6 +1012,9 @@ static int hal_board_load_fdt_info(const void *dtb)
         //TODO FIXME POWER
         //bl60x_fw_rf_table_set(channel_div_table, channel_cnt_table, lo_fcal_div);
 
+        uint8_t pwr_table_11g_dtb[8];
+        int has_pwr_table_11g = 0;
+
         USER_UNUSED(pwr_table);
         addr_prop = fdt_getprop(fdt, offset1, "pwr_table_11b", &lentmp);
         if (4*4 == lentmp) {
@@ -1045,6 +1048,8 @@ static int hal_board_load_fdt_info(const void *dtb)
                 pwr_table[7]
             );
             bl_tpc_update_power_rate_11g((int8_t*)pwr_table);
+            memcpy(pwr_table_11g_dtb, pwr_table, 8);
+            has_pwr_table_11g = 1;
         } else {
             blog_error("pwr_table_11g NULL. lentmp = %d\r\n", lentmp);
         }
@@ -1064,6 +1069,32 @@ static int hal_board_load_fdt_info(const void *dtb)
                 pwr_table[6],
                 pwr_table[7]
             );
+            if (has_pwr_table_11g) {
+                /* Clamp each MCS to the 11g rate with the same modulation
+                 * (MCS0=6M, MCS1=12M, MCS2=18M, MCS3=24M, MCS4=36M,
+                 * MCS5=48M, MCS6=54M, MCS7 densest -> 54M). Stock dtbs
+                 * commonly copy the 11g values index by index, but the MCS
+                 * ladder is offset one modulation step, so MCS4/MCS5 end up
+                 * 2-4 dB above the power the PA can transmit their
+                 * modulation at cleanly (measured: pinned MCS5 at 10 dBm
+                 * has 0% delivery while 48M at 6 dBm is clean). */
+                static const uint8_t mcs_11g_twin[8] = {0, 2, 3, 4, 5, 6, 7, 7};
+                for (i = 0; i < 8; i++) {
+                    if (pwr_table[i] > pwr_table_11g_dtb[mcs_11g_twin[i]]) {
+                        pwr_table[i] = pwr_table_11g_dtb[mcs_11g_twin[i]];
+                    }
+                }
+                blog_info("pwr_table_11n (modulation clamped) :%u %u %u %u %u %u %u %u\r\n",
+                    pwr_table[0],
+                    pwr_table[1],
+                    pwr_table[2],
+                    pwr_table[3],
+                    pwr_table[4],
+                    pwr_table[5],
+                    pwr_table[6],
+                    pwr_table[7]
+                );
+            }
             bl_tpc_update_power_rate_11n((int8_t*)pwr_table);
         }  else {
             blog_error("pwr_table_11n NULL. lentmp = %d\r\n", lentmp);
