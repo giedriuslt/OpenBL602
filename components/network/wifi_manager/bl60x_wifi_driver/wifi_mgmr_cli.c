@@ -813,6 +813,19 @@ static void wifi_rc_limit_disable(char *buf, int len, int argc, char **argv)
     bl_os_printf("rate limit cleared\r\n");
 }
 
+static void wifi_rc_retry_cmd(char *buf, int len, int argc, char **argv)
+{
+    if (argc != 2) {
+        bl_os_printf("rc_retry [4-32|0] - MAC retry attempts per frame (0 = fw default 7/4)\r\n");
+        return;
+    }
+    if (wifi_mgmr_rate_limit_retry_budget(atoi(argv[1]))) {
+        bl_os_printf("rc_retry: bad argument or not supported\r\n");
+    } else {
+        bl_os_printf("retry budget set to %d\r\n", atoi(argv[1]));
+    }
+}
+
 static void wifi_rc_stats_cmd(char *buf, int len, int argc, char **argv)
 {
     if (wifi_mgmr_rc_stats_dump()) {
@@ -1247,6 +1260,7 @@ const static struct cli_command cmds_user[] STATIC_CLI_CMD_ATTRIBUTE = {
         { "rc_limit_dis", "remove wifi tx rate cap", wifi_rc_limit_disable},
         { "rc_sgi_tx", "allow short GI on wifi tx [0/1]", wifi_rc_sgi_cmd},
         { "rc_stats", "dump rate controller sample table", wifi_rc_stats_cmd},
+        { "rc_retry", "MAC retry attempts per frame [4-32|0=default]", wifi_rc_retry_cmd},
         { "wifi_sta_ps_on", "wifi power saving mode ON", wifi_power_saving_on_cmd},
         { "wifi_sta_ps_off", "wifi power saving mode OFF", wifi_power_saving_off_cmd},
         { "wifi_sta_ps_set", "set wifi ps mode active time", wifi_power_saving_set},

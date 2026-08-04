@@ -307,6 +307,12 @@ int wifi_mgmr_rate_limit_get(uint8_t *max_ht_mcs, uint8_t *max_legacy_ridx);
  * long GI on TX. Independent of the rate caps: not affected by
  * wifi_mgmr_rate_limit_clear(), persists across reconnects until re-enabled. */
 int wifi_mgmr_rate_limit_sgi_tx(uint8_t enable);
+/* Override the MAC per-frame retry limits in the TX policy table (BL602
+ * only). The firmware default (7/4 attempts) exhausts before the 4-step
+ * retry chain reaches its robust fallback steps; 16 gives every step its
+ * 4 attempts. 0 restores the firmware default. Persists across
+ * reconnects until changed. Costs airtime/latency on stubborn frames. */
+int wifi_mgmr_rate_limit_retry_budget(uint8_t attempts);
 /* Report whether the modem hardware has LDPC encode (TX) / decode (RX)
  * support (BL602 only; reads the modem HDMCONFIG capability register). */
 int wifi_mgmr_rate_limit_ldpc_info(uint8_t *ldpc_tx, uint8_t *ldpc_rx);

@@ -62,6 +62,16 @@
  * it makes every recomputation reproduce the cap. */
 #define STA_INFO_TAG_SIZEOF     368
 #define STA_INFO_OFF_VIF_IDX    39   /* uint8_t, 0xFF = no vif */
+#define STA_INFO_OFF_BUF_CTRL   320  /* struct txl_buffer_control *, the policy table */
+
+/* Policy table (first 52 bytes of txl_buffer_control): the MAC hardware
+ * reads the frame retry limits from maccntrlinfo2 [15:0]. rc_init writes
+ * 0xFFFF0704 (RTS threshold disabled, retry limits 7 and 4), so a frame
+ * gets ~7 attempts total while the 4-step retry chain needs 16 (4 per
+ * step, see rc_update_counters) - the fallback steps 2/3 never transmit
+ * and the chain's robust safety net is unreachable. */
+#define POLICY_OFF_MACCNTRLINFO2 16
+#define POLICY_MAC2_DEFAULT_LIMITS 0x0704u
 #define VIF_INFO_TAG_SIZEOF     1512
 #define VIF_INFO_OFF_HT_MCS_MASK 347 /* bss_info: HT MCS0-7 mask for 1SS */
 #define VIF_MAX                 2    /* NX_VIRT_DEV_MAX */
@@ -87,6 +97,10 @@ static uint8_t s_sgi_tx_disabled = 0;
 static uint8_t s_orig_vif_mask[VIF_MAX];
 static uint8_t s_orig_vif_valid[VIF_MAX];
 
+/* 0 = firmware default retry limits (7/4); N = use N for both limits.
+ * 16 makes the whole 4-step retry chain reachable (4 attempts per step). */
+static uint8_t s_retry_budget = 0;
+
 /* Bounds computed by rc_init for the current association, saved before the
  * first clamp so the cap can be lifted without a reconnect. */
 static uint8_t s_orig_mcs[RC_STA_MAX];
@@ -98,7 +112,7 @@ static inline int rate_limit_active(void)
 {
     return s_cap_mcs != WIFI_MGMR_RATE_LIMIT_NONE ||
            s_cap_ridx != WIFI_MGMR_RATE_LIMIT_NONE ||
-           s_sgi_tx_disabled;
+           s_sgi_tx_disabled || s_retry_budget != 0;
 }
 
 static inline uint8_t *rc_entry(uint8_t sta_idx)
@@ -303,6 +317,28 @@ static void rc_open_legacy_sampling(uint8_t *st)
     }
 }
 
+/* Apply (or restore) the MAC retry limits in the per-STA policy table.
+ * rc_init is the only writer of maccntrlinfo2, once per association, so
+ * the poke is durable until reassociation (the CONNECTED hook re-applies). */
+static void rc_apply_retry_budget(uint8_t sta_idx)
+{
+    uint8_t *bc = *(uint8_t **)(sta_info_tab +
+            (uint32_t)sta_idx * STA_INFO_TAG_SIZEOF + STA_INFO_OFF_BUF_CTRL);
+    volatile uint32_t *mac2;
+    uint32_t limits;
+
+    if (bc == NULL) {
+        return;
+    }
+    mac2 = (volatile uint32_t *)(bc + POLICY_OFF_MACCNTRLINFO2);
+    if (s_retry_budget) {
+        limits = ((uint32_t)s_retry_budget << 8) | s_retry_budget;
+    } else {
+        limits = POLICY_MAC2_DEFAULT_LIMITS;
+    }
+    *mac2 = (*mac2 & 0xFFFF0000u) | limits;
+}
+
 int wifi_mgmr_rate_limit_apply_sta(uint8_t sta_idx)
 {
     uint8_t *st;
@@ -347,6 +383,8 @@ int wifi_mgmr_rate_limit_apply_sta(uint8_t sta_idx)
 
     /* keep me_update_buffer_control() from reverting the MCS clamp */
     rc_cap_vif_mcs_mask(sta_idx);
+
+    rc_apply_retry_budget(sta_idx);
 
     return 0;
 }
@@ -396,6 +434,15 @@ int wifi_mgmr_rate_limit_get(uint8_t *max_ht_mcs, uint8_t *max_legacy_ridx)
 int wifi_mgmr_rate_limit_sgi_tx(uint8_t enable)
 {
     s_sgi_tx_disabled = enable ? 0 : 1;
+    return wifi_mgmr_rate_limit_apply_sta(wifi_hw.sta_idx);
+}
+
+int wifi_mgmr_rate_limit_retry_budget(uint8_t attempts)
+{
+    if (attempts != 0 && (attempts < 4 || attempts > 32)) {
+        return -1;
+    }
+    s_retry_budget = attempts;
     return wifi_mgmr_rate_limit_apply_sta(wifi_hw.sta_idx);
 }
 
@@ -533,6 +580,12 @@ int wifi_mgmr_rate_limit_get(uint8_t *max_ht_mcs, uint8_t *max_legacy_ridx)
 int wifi_mgmr_rate_limit_sgi_tx(uint8_t enable)
 {
     (void)enable;
+    return -1;
+}
+
+int wifi_mgmr_rate_limit_retry_budget(uint8_t attempts)
+{
+    (void)attempts;
     return -1;
 }
 
