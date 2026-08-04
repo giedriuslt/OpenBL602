@@ -312,9 +312,9 @@ static void rc_cap_vif_mcs_mask(uint8_t sta_idx)
  * rates then compete with MCS exactly as they do on 11b-enabled APs. */
 static void rc_open_legacy_sampling(uint8_t *st)
 {
-    if (st[RC_OFF_FORMAT_MOD] >= 2 && st[RC_OFF_R_IDX_MIN] > 3) {
-        st[RC_OFF_R_IDX_MIN] = 3;
-    }
+    //if (st[RC_OFF_FORMAT_MOD] >= 2 && st[RC_OFF_R_IDX_MIN] > 3) {
+    //    st[RC_OFF_R_IDX_MIN] = 3;
+    //}
 }
 
 /* Apply (or restore) the MAC retry limits in the per-STA policy table.
