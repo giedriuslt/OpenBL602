@@ -31,6 +31,7 @@
 #define RC_STA_STATS_SIZEOF     200
 #define RC_STA_MAX              5    /* sizeof(sta_stats) / RC_STA_STATS_SIZEOF */
 #define RC_OFF_RATE_STATS       4    /* struct rc_rate_stats[10], the sample table */
+#define RC_OFF_RETRY_CHAIN      124  /* struct {uint32_t tp; uint16_t idx;}[4], 8B step */
 #define RC_OFF_MCS_MAX          184  /* uint8_t, highest HT MCS the sampler may pick */
 #define RC_OFF_R_IDX_MIN        185  /* uint8_t, lowest legacy rate index */
 #define RC_OFF_R_IDX_MAX        186  /* uint8_t, highest legacy rate index */
@@ -137,6 +138,81 @@ static uint16_t rc_cap_rate_word(uint16_t cfg)
     return cfg;
 }
 
+/* Is `word` present in cfg[] outside index `self`? */
+static int rc_word_taken(const uint16_t *cfg, uint16_t n, uint16_t self, uint16_t word)
+{
+    uint16_t k;
+
+    for (k = 0; k < n; k++) {
+        if (k != self && cfg[k] == word) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Clamping rate words in place can make an entry identical to another one:
+ * stripping SGI from MCSn-SGI when plain MCSn is already present, or
+ * clamping several high rates onto the same cap. The blob keeps its table
+ * duplicate-free while refilling it (rc_check_rate_duplicated), but our
+ * rewrite runs afterwards, so we have to dedupe ourselves - duplicates
+ * waste sample table slots and can put one rate into two retry chain steps.
+ *
+ * Remap a colliding entry onto an unused rate of the same format, searching
+ * downwards first so the table gains a more robust rate rather than another
+ * copy of a fast one. Entries the retry chain currently points at are moved
+ * last, so an established entry keeps its measured statistics. */
+static void rc_dedupe_words(uint16_t *cfg, uint16_t n, uint8_t ridx_min, uint16_t in_chain)
+{
+    uint16_t pass, i;
+
+    for (pass = 0; pass < 2; pass++) {
+        for (i = 0; i < n; i++) {
+            uint16_t mask, base;
+            int lo, hi, want, v, pick = -1;
+
+            if (pass == 0 && (in_chain & (1u << i))) {
+                continue;
+            }
+            if (!rc_word_taken(cfg, n, i, cfg[i])) {
+                continue;
+            }
+
+            if (((cfg[i] >> 11) & 0x7) >= 2) {
+                mask = 0x7;
+                lo = 0;
+                hi = (s_cap_mcs != WIFI_MGMR_RATE_LIMIT_NONE) ? s_cap_mcs : RC_HT_MCS_MAX;
+            } else {
+                mask = 0x7f;
+                lo = ridx_min;
+                hi = (s_cap_ridx != WIFI_MGMR_RATE_LIMIT_NONE) ? s_cap_ridx : RC_LEGACY_RIDX_MAX;
+            }
+            if (hi < lo) {
+                continue;
+            }
+            base = cfg[i] & ~mask;
+            want = cfg[i] & mask;
+            if (want > hi) {
+                want = hi;
+            }
+
+            for (v = want; v >= lo && pick < 0; v--) {
+                if (!rc_word_taken(cfg, n, i, base | (uint16_t)v)) {
+                    pick = v;
+                }
+            }
+            for (v = want + 1; v <= hi && pick < 0; v++) {
+                if (!rc_word_taken(cfg, n, i, base | (uint16_t)v)) {
+                    pick = v;
+                }
+            }
+            if (pick >= 0) {
+                cfg[i] = base | (uint16_t)pick;
+            }
+        }
+    }
+}
+
 /* The bounds only constrain rates the sampler generates from now on.
  * Entries already in the sample table can sit above the cap (rc_init seeds
  * the highest rate_map MCS regardless of mcs_max, and table rebuilds keep
@@ -146,7 +222,10 @@ static uint16_t rc_cap_rate_word(uint16_t cfg)
  * control windows. */
 static void rc_cap_sample_table(uint8_t *st)
 {
+    uint16_t orig[RC_MAX_N_SAMPLE];
+    uint16_t cfg[RC_MAX_N_SAMPLE];
     uint16_t n = rc_rd16(st + RC_OFF_NO_SAMPLES);
+    uint16_t in_chain = 0;
     uint16_t i;
 
     if (n > RC_MAX_N_SAMPLE) {
@@ -154,11 +233,25 @@ static void rc_cap_sample_table(uint8_t *st)
     }
     for (i = 0; i < n; i++) {
         uint8_t *e = st + RC_OFF_RATE_STATS + i * RC_ENTRY_SIZEOF;
-        uint16_t cfg = rc_rd16(e + RC_ENTRY_OFF_RATE_CFG);
-        uint16_t capped = rc_cap_rate_word(cfg);
 
-        if (capped != cfg) {
-            rc_wr16(e + RC_ENTRY_OFF_RATE_CFG, capped);
+        orig[i] = rc_rd16(e + RC_ENTRY_OFF_RATE_CFG);
+        cfg[i] = rc_cap_rate_word(orig[i]);
+    }
+    for (i = 0; i < 4; i++) {
+        uint16_t idx = rc_rd16(st + RC_OFF_RETRY_CHAIN + i * 8 + 4);
+
+        if (idx < n) {
+            in_chain |= 1u << idx;
+        }
+    }
+
+    rc_dedupe_words(cfg, n, st[RC_OFF_R_IDX_MIN], in_chain);
+
+    for (i = 0; i < n; i++) {
+        if (cfg[i] != orig[i]) {
+            uint8_t *e = st + RC_OFF_RATE_STATS + i * RC_ENTRY_SIZEOF;
+
+            rc_wr16(e + RC_ENTRY_OFF_RATE_CFG, cfg[i]);
             rc_wr16(e + RC_ENTRY_OFF_ATTEMPTS, 0);
             rc_wr16(e + RC_ENTRY_OFF_SUCCESS, 0);
             rc_wr16(e + RC_ENTRY_OFF_PROB, 0);
@@ -307,7 +400,6 @@ int wifi_mgmr_rate_limit_sgi_tx(uint8_t enable)
 }
 
 /* additional rc_sta_stats offsets used by the stats dump */
-#define RC_OFF_RETRY_CHAIN      124  /* struct {uint32_t tp; uint16_t idx;}[4], 8B step */
 #define RC_OFF_AVG_AMPDU_LEN    168  /* uint32_t, 16.16 fixed point */
 #define RC_OFF_MAX_AMSDU_LEN    194  /* uint16_t, negotiated A-MSDU limit, 0 = off */
 #define RC_OFF_CURR_AMSDU_LEN   196  /* uint16_t, A-MSDU size currently in use */
