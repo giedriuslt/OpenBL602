@@ -313,6 +313,8 @@ int wifi_mgmr_rate_limit_sgi_tx(uint8_t enable)
 #define RC_OFF_CURR_AMSDU_LEN   196  /* uint16_t, A-MSDU size currently in use */
 #define RC_OFF_FIXED_RATE_CFG   198  /* uint16_t, 0xFFFF = auto */
 #define RC_ENTRY_OFF_SAMPLE_SKIPPED 8 /* uint8_t */
+#define RC_ENTRY_OFF_N_RETRY    10   /* uint8_t, retries budgeted when in the chain */
+#define RC_ENTRY_OFF_RATE_ALLOWED 11 /* uint8_t, eligible for the retry chain */
 
 /* Dump the live rate controller sample table. The status word handed to
  * the host never reports MAC retries (see bl_tx.c), but the controller's
@@ -358,14 +360,16 @@ int wifi_mgmr_rc_stats_dump(void)
             }
         }
         if (((cfg >> 11) & 0x7) >= 2) {
-            bl_os_printf(" [%2u]%c MCS%u%s      att %5u ok %5u prob %3u%% skip %u\r\n",
+            bl_os_printf(" [%2u]%c MCS%u%s      att %5u ok %5u prob %3u%% skip %-3u nrty %u%s\r\n",
                     i, step, cfg & 0x7, (cfg & 0x200) ? "-SGI" : "    ",
-                    att, ok, (unsigned)prob, e[RC_ENTRY_OFF_SAMPLE_SKIPPED]);
+                    att, ok, (unsigned)prob, e[RC_ENTRY_OFF_SAMPLE_SKIPPED],
+                    e[RC_ENTRY_OFF_N_RETRY], e[RC_ENTRY_OFF_RATE_ALLOWED] ? "" : " !allowed");
         } else {
             uint16_t half = (cfg & 0x7f) < 12 ? legacy_halfmbps[cfg & 0x7f] : 0;
-            bl_os_printf(" [%2u]%c L%-2u %2u.%uM    att %5u ok %5u prob %3u%% skip %u\r\n",
+            bl_os_printf(" [%2u]%c L%-2u %2u.%uM    att %5u ok %5u prob %3u%% skip %-3u nrty %u%s\r\n",
                     i, step, cfg & 0x7f, half / 2, (half & 1) * 5,
-                    att, ok, (unsigned)prob, e[RC_ENTRY_OFF_SAMPLE_SKIPPED]);
+                    att, ok, (unsigned)prob, e[RC_ENTRY_OFF_SAMPLE_SKIPPED],
+                    e[RC_ENTRY_OFF_N_RETRY], e[RC_ENTRY_OFF_RATE_ALLOWED] ? "" : " !allowed");
         }
     }
     return 0;
