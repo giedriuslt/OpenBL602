@@ -309,6 +309,8 @@ int wifi_mgmr_rate_limit_sgi_tx(uint8_t enable)
 /* additional rc_sta_stats offsets used by the stats dump */
 #define RC_OFF_RETRY_CHAIN      124  /* struct {uint32_t tp; uint16_t idx;}[4], 8B step */
 #define RC_OFF_AVG_AMPDU_LEN    168  /* uint32_t, 16.16 fixed point */
+#define RC_OFF_MAX_AMSDU_LEN    194  /* uint16_t, negotiated A-MSDU limit, 0 = off */
+#define RC_OFF_CURR_AMSDU_LEN   196  /* uint16_t, A-MSDU size currently in use */
 #define RC_OFF_FIXED_RATE_CFG   198  /* uint16_t, 0xFFFF = auto */
 #define RC_ENTRY_OFF_SAMPLE_SKIPPED 8 /* uint8_t */
 
@@ -335,10 +337,11 @@ int wifi_mgmr_rc_stats_dump(void)
     }
     avg = *(volatile uint32_t *)(st + RC_OFF_AVG_AMPDU_LEN);
 
-    bl_os_printf("rc sta%u: bounds mcs<=%u ridx %u..%u sgi %u fixed %04x avg_ampdu %u.%02u\r\n",
+    bl_os_printf("rc sta%u: bounds mcs<=%u ridx %u..%u sgi %u fixed %04x avg_ampdu %u.%02u amsdu %u/%u\r\n",
             sta_idx, st[RC_OFF_MCS_MAX], st[RC_OFF_R_IDX_MIN], st[RC_OFF_R_IDX_MAX],
             st[RC_OFF_SHORT_GI], rc_rd16(st + RC_OFF_FIXED_RATE_CFG),
-            (unsigned)(avg >> 16), (unsigned)(((avg & 0xffff) * 100) >> 16));
+            (unsigned)(avg >> 16), (unsigned)(((avg & 0xffff) * 100) >> 16),
+            rc_rd16(st + RC_OFF_CURR_AMSDU_LEN), rc_rd16(st + RC_OFF_MAX_AMSDU_LEN));
 
     for (i = 0; i < n; i++) {
         uint8_t *e = st + RC_OFF_RATE_STATS + i * RC_ENTRY_SIZEOF;
