@@ -63,6 +63,10 @@
 #define STA_INFO_TAG_SIZEOF     368
 #define STA_INFO_OFF_VIF_IDX    39   /* uint8_t, 0xFF = no vif */
 #define STA_INFO_OFF_BUF_CTRL   320  /* struct txl_buffer_control *, the policy table */
+#define STA_INFO_OFF_POL_FLAGS  334  /* uint8_t, policy update flags */
+#define STA_POL_UPD_RATE        0x01 /* bit rc sets after a retry chain change; makes
+                                        me_update_buffer_control rebuild the policy
+                                        table rate words from the sample table */
 
 /* Policy table (first 52 bytes of txl_buffer_control): the MAC hardware
  * reads the frame retry limits from maccntrlinfo2 [15:0]. rc_init writes
@@ -379,6 +383,14 @@ int wifi_mgmr_rate_limit_apply_sta(uint8_t sta_idx)
 
     if (rate_limit_active()) {
         rc_cap_sample_table(st);
+        /* The hardware transmits from the policy table, which is only
+         * rebuilt from the sample table when this flag is raised (normally
+         * by rc after a retry chain change). Without it the policy keeps
+         * transmitting the pre-rewrite rate words - the air and the sample
+         * table silently diverge, and TX stats get attributed to the wrong
+         * rates. */
+        sta_info_tab[(uint32_t)sta_idx * STA_INFO_TAG_SIZEOF + STA_INFO_OFF_POL_FLAGS]
+                |= STA_POL_UPD_RATE;
     }
 
     /* keep me_update_buffer_control() from reverting the MCS clamp */
