@@ -62,6 +62,8 @@ static netif_input_fn      original_ap_input      = NULL;
 
 
 
+
+
 static void log_icmp_packet(const char *dir, struct pbuf *p) {
     if (p->len < SIZEOF_ETH_HDR + SIZEOF_IPH) return;
 
@@ -109,7 +111,7 @@ static void send_proxy_arp_reply(struct netif *sta_netif,
 {
     // Allocate buffer for Ethernet (14 bytes) + ARP Header (28 bytes)
     u16_t frame_len = SIZEOF_ETH_HDR + SIZEOF_ETHARP_HDR;
-    struct pbuf *p = pbuf_alloc(PBUF_RAW, frame_len, PBUF_RAM);
+    struct pbuf *p = pbuf_alloc(PBUF_RAW_TX, frame_len, PBUF_RAM);
     if (!p) return;
 
     struct eth_hdr *eth = (struct eth_hdr *)p->payload;
@@ -200,8 +202,12 @@ static err_t mac_nat_ap_input(struct pbuf *p, struct netif *netif) {
 
 	log_icmp_packet("OUTBOUND AP->STA", p);
     // Allocate a fresh TX pbuf with link headroom
-    struct pbuf *q = pbuf_alloc(PBUF_LINK, p->tot_len, PBUF_RAM);
-    if (!q) return ERR_MEM;
+	struct pbuf *q = pbuf_alloc(PBUF_RAW_TX, p->tot_len, PBUF_RAM);
+	if (!q) {
+		pbuf_free(p);
+		return ERR_MEM;
+	}
+
 
     pbuf_copy(q, p);
 
@@ -268,7 +274,11 @@ static err_t mac_nat_sta_input(struct pbuf *p, struct netif *netif) {
 
             uint8_t *real_client_mac = lookup_nat_table(target_ip);
             if (real_client_mac != NULL && g_ap_netif != NULL) {
-                struct pbuf *q = pbuf_alloc(PBUF_LINK, p->tot_len, PBUF_RAM);
+                struct pbuf *q = pbuf_alloc(PBUF_RAW_TX, p->tot_len, PBUF_RAM);
+				if (!q) {
+					pbuf_free(p);
+					return ERR_MEM;
+				}
                 if (q) {
                     pbuf_copy(q, p);
                     struct eth_hdr *eth_q = (struct eth_hdr *)q->payload;
@@ -292,7 +302,12 @@ static err_t mac_nat_sta_input(struct pbuf *p, struct netif *netif) {
 
         uint8_t *real_client_mac = lookup_nat_table(dest_ip);
         if (real_client_mac != NULL && g_ap_netif != NULL) {
-            struct pbuf *q = pbuf_alloc(PBUF_LINK, p->tot_len, PBUF_RAM);
+            struct pbuf *q = pbuf_alloc(PBUF_RAW_TX, p->tot_len, PBUF_RAM);
+			if (!q) {
+				pbuf_free(p);
+				return ERR_MEM;
+			}
+
             if (q != NULL) {
                 pbuf_copy(q, p);
                 struct eth_hdr *eth_q = (struct eth_hdr *)q->payload;
