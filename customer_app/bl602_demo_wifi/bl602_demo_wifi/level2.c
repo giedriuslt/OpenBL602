@@ -261,6 +261,13 @@ static err_t mac_nat_sta_input(struct pbuf *p, struct netif *netif) {
         struct ip_hdr *iphdr = (struct ip_hdr *)((uint8_t *)p->payload + SIZEOF_ETH_HDR);
         uint16_t ip_hdr_len = IPH_HL(iphdr) * 4;
 
+		uint32_t dest_ip = iphdr->dest.addr;
+
+        // 1. CRITICAL: If packet is for BL602's own STA IP, pass directly to local stack
+        if (dest_ip == netif_ip4_addr(netif)->addr) {
+            return original_sta_input(p, netif);
+        }
+
         // Check for UDP traffic (DHCP)
         if (IPH_PROTO(iphdr) == 17) { // 17 = UDP
             struct udp_hdr *udphdr = (struct udp_hdr *)((uint8_t *)iphdr + ip_hdr_len);
@@ -268,10 +275,16 @@ static err_t mac_nat_sta_input(struct pbuf *p, struct netif *netif) {
             // Intercept Inbound DHCP Replies (UDP Port 68)
             if (lwip_ntohs(udphdr->dest) == 68) {
                 uint8_t *dhcp_payload = (uint8_t *)udphdr + sizeof(struct udp_hdr);
-                
+				
                 uint32_t yiaddr;
                 uint8_t *chaddr = dhcp_payload + 28; // Client MAC offset in DHCP header
                 memcpy(&yiaddr, dhcp_payload + 16, 4); // Offered IP offset in DHCP header
+				
+				// 1. CRITICAL: If the DHCP offer/ack is for BL602's STA MAC, pass to local stack!
+				if (memcmp(chaddr, g_sta_netif->hwaddr, ETH_HWADDR_LEN) == 0) {
+					return original_sta_input(p, netif);
+				}
+                
 
                 // Automatically bind client MAC to the newly assigned IP
                 if (yiaddr != 0) {
@@ -301,7 +314,6 @@ static err_t mac_nat_sta_input(struct pbuf *p, struct netif *netif) {
         }
 
         // Normal Inbound Unicast IPv4 Data
-        uint32_t dest_ip = iphdr->dest.addr;
         uint8_t *real_client_mac = lookup_nat_table(dest_ip);
         if (real_client_mac != NULL && g_ap_netif != NULL) {
             struct pbuf *q = pbuf_alloc(PBUF_RAW_TX, p->tot_len, PBUF_RAM);
