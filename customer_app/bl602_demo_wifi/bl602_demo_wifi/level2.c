@@ -8,6 +8,7 @@
 #include "lwip/pbuf.h"
 #include "lwip/prot/ethernet.h"
 #include "lwip/prot/icmp.h"
+#include "lwip/prot/udp.h"
 #include "lwip/prot/etharp.h"
 #include "lwip/prot/ip4.h"
 
@@ -196,53 +197,52 @@ static err_t mac_nat_sta_linkoutput(struct netif *netif, struct pbuf *p) {
 static err_t mac_nat_ap_input(struct pbuf *p, struct netif *netif) {
     if (!p || !p->payload || !g_sta_netif) return original_ap_input(p, netif);
 
+    log_icmp_packet("OUTBOUND AP->STA", p);
 
+    struct eth_hdr *eth = (struct eth_hdr *)p->payload;
+    uint16_t type = lwip_ntohs(eth->type);
 
-	log_icmp_packet("OUTBOUND AP->STA", p);
-    // Allocate a fresh TX pbuf with link headroom
-	struct pbuf *q = pbuf_alloc(PBUF_RAW_TX, p->tot_len, PBUF_RAM);
-	if (!q) {
-		pbuf_free(p);
-		return ERR_MEM;
-	}
+    if (type == ETHTYPE_ARP) {
+        struct etharp_hdr *arphdr = (struct etharp_hdr *)((uint8_t *)p->payload + SIZEOF_ETH_HDR);
+        uint32_t target_ip;
+        memcpy(&target_ip, &arphdr->dipaddr, sizeof(target_ip));
 
+        // Allow local ARP requests targeting BL602 AP IP to pass to local lwIP stack
+        if (target_ip == netif_ip4_addr(netif)->addr) {
+            return original_ap_input(p, netif);
+        }
 
+        uint32_t src_ip;
+        memcpy(&src_ip, &arphdr->sipaddr, sizeof(src_ip));
+        update_nat_table(src_ip, eth->src.addr);
+    }
+
+    struct pbuf *q = pbuf_alloc(PBUF_RAW_TX, p->tot_len, PBUF_RAM);
+    if (!q) {
+        pbuf_free(p);
+        return ERR_MEM;
+    }
     pbuf_copy(q, p);
 
-    struct eth_hdr *eth = (struct eth_hdr *)q->payload;
-    uint16_t type = lwip_ntohs(eth->type);
+    struct eth_hdr *eth_q = (struct eth_hdr *)q->payload;
 
     if (type == ETHTYPE_IP) {
         struct ip_hdr *iphdr = (struct ip_hdr *)((uint8_t *)q->payload + SIZEOF_ETH_HDR);
         if (iphdr->src.addr != 0) {
-            update_nat_table(iphdr->src.addr, eth->src.addr);
+            update_nat_table(iphdr->src.addr, eth_q->src.addr);
         }
     } else if (type == ETHTYPE_ARP) {
-        struct etharp_hdr *arphdr = (struct etharp_hdr *)((uint8_t *)q->payload + SIZEOF_ETH_HDR);
-		uint32_t target_ip;
-		memcpy(&target_ip, &arphdr->dipaddr, sizeof(target_ip));
-
-		// If ARP target is the BL602 AP interface IP itself, pass to local stack
-		if (target_ip == netif_ip4_addr(netif)->addr) {
-			pbuf_free(q);
-			return original_ap_input(p, netif);
-		}
-	
-        uint32_t src_ip;
-        memcpy(&src_ip, &arphdr->sipaddr, sizeof(src_ip));
-        
-        update_nat_table(src_ip, eth->src.addr);
-        memcpy(&arphdr->shwaddr, g_sta_netif->hwaddr, ETH_HWADDR_LEN);
+        struct etharp_hdr *arphdr_q = (struct etharp_hdr *)((uint8_t *)q->payload + SIZEOF_ETH_HDR);
+        memcpy(&arphdr_q->shwaddr, g_sta_netif->hwaddr, ETH_HWADDR_LEN);
     }
 
-    // Rewrite L2 Source MAC to STA MAC
-    memcpy(eth->src.addr, g_sta_netif->hwaddr, ETH_HWADDR_LEN);
+    // Rewrite L2 Source MAC to STA MAC for transmission to upstream router
+    memcpy(eth_q->src.addr, g_sta_netif->hwaddr, ETH_HWADDR_LEN);
 
-    // Forward cloned buffer to physical STA driver
     original_sta_linkoutput(g_sta_netif, q);
 
-    pbuf_free(q); // Clean up TX copy
-    pbuf_free(p); // Consume original RX pbuf
+    pbuf_free(q);
+    pbuf_free(p);
     return ERR_OK;
 }
 
@@ -252,14 +252,75 @@ static err_t mac_nat_ap_input(struct pbuf *p, struct netif *netif) {
 static err_t mac_nat_sta_input(struct pbuf *p, struct netif *netif) {
     if (!p || !p->payload) return original_sta_input(p, netif);
 
-    // Log inbound ICMP packets
     log_icmp_packet("INBOUND STA->AP", p);
 
     struct eth_hdr *eth = (struct eth_hdr *)p->payload;
     uint16_t type = lwip_ntohs(eth->type);
 
-    // Case 1: Incoming ARP
-    if (type == ETHTYPE_ARP) {
+    if (type == ETHTYPE_IP) {
+        struct ip_hdr *iphdr = (struct ip_hdr *)((uint8_t *)p->payload + SIZEOF_ETH_HDR);
+        uint16_t ip_hdr_len = IPH_HL(iphdr) * 4;
+
+        // Check for UDP traffic (DHCP)
+        if (IPH_PROTO(iphdr) == 17) { // 17 = UDP
+            struct udp_hdr *udphdr = (struct udp_hdr *)((uint8_t *)iphdr + ip_hdr_len);
+
+            // Intercept Inbound DHCP Replies (UDP Port 68)
+            if (lwip_ntohs(udphdr->dest) == 68) {
+                uint8_t *dhcp_payload = (uint8_t *)udphdr + sizeof(struct udp_hdr);
+                
+                uint32_t yiaddr;
+                uint8_t *chaddr = dhcp_payload + 28; // Client MAC offset in DHCP header
+                memcpy(&yiaddr, dhcp_payload + 16, 4); // Offered IP offset in DHCP header
+
+                // Automatically bind client MAC to the newly assigned IP
+                if (yiaddr != 0) {
+                    update_nat_table(yiaddr, chaddr);
+                }
+
+                if (g_ap_netif != NULL) {
+                    struct pbuf *q = pbuf_alloc(PBUF_RAW_TX, p->tot_len, PBUF_RAM);
+                    if (q) {
+                        pbuf_copy(q, p);
+                        struct eth_hdr *eth_q = (struct eth_hdr *)q->payload;
+
+                        // Forward to client MAC (or broadcast if dest MAC is broadcast)
+                        if (!ip4_addr_isbroadcast((const ip4_addr_t *)&iphdr->dest, netif)) {
+                            memcpy(eth_q->dest.addr, chaddr, ETH_HWADDR_LEN);
+                        }
+                        // CRITICAL: Rewrite L2 Source MAC to SoftAP MAC
+                        memcpy(eth_q->src.addr, g_ap_netif->hwaddr, ETH_HWADDR_LEN);
+
+                        g_ap_netif->linkoutput(g_ap_netif, q);
+                        pbuf_free(q);
+                    }
+                    pbuf_free(p);
+                    return ERR_OK;
+                }
+            }
+        }
+
+        // Normal Inbound Unicast IPv4 Data
+        uint32_t dest_ip = iphdr->dest.addr;
+        uint8_t *real_client_mac = lookup_nat_table(dest_ip);
+        if (real_client_mac != NULL && g_ap_netif != NULL) {
+            struct pbuf *q = pbuf_alloc(PBUF_RAW_TX, p->tot_len, PBUF_RAM);
+            if (q) {
+                pbuf_copy(q, p);
+                struct eth_hdr *eth_q = (struct eth_hdr *)q->payload;
+
+                memcpy(eth_q->dest.addr, real_client_mac, ETH_HWADDR_LEN);
+                // CRITICAL: Rewrite L2 Source MAC to SoftAP MAC
+                memcpy(eth_q->src.addr, g_ap_netif->hwaddr, ETH_HWADDR_LEN);
+
+                g_ap_netif->linkoutput(g_ap_netif, q);
+                pbuf_free(q);
+            }
+            pbuf_free(p);
+            return ERR_OK;
+        }
+    } 
+    else if (type == ETHTYPE_ARP) {
         struct etharp_hdr *arphdr = (struct etharp_hdr *)((uint8_t *)p->payload + SIZEOF_ETH_HDR);
         uint16_t opcode = lwip_ntohs(arphdr->opcode);
 
@@ -273,25 +334,21 @@ static err_t mac_nat_sta_input(struct pbuf *p, struct netif *netif) {
                 pbuf_free(p);
                 return ERR_OK;
             }
-        } 
-        // Forward ARP Replies from Router back to Client
-        else if (opcode == ARP_REPLY) {
+        } else if (opcode == ARP_REPLY) {
             uint32_t target_ip;
             memcpy(&target_ip, &arphdr->dipaddr, sizeof(target_ip));
 
             uint8_t *real_client_mac = lookup_nat_table(target_ip);
             if (real_client_mac != NULL && g_ap_netif != NULL) {
                 struct pbuf *q = pbuf_alloc(PBUF_RAW_TX, p->tot_len, PBUF_RAM);
-				if (!q) {
-					pbuf_free(p);
-					return ERR_MEM;
-				}
                 if (q) {
                     pbuf_copy(q, p);
                     struct eth_hdr *eth_q = (struct eth_hdr *)q->payload;
                     struct etharp_hdr *arp_q = (struct etharp_hdr *)((uint8_t *)q->payload + SIZEOF_ETH_HDR);
 
                     memcpy(eth_q->dest.addr, real_client_mac, ETH_HWADDR_LEN);
+                    // CRITICAL: Rewrite L2 Source MAC to SoftAP MAC
+                    memcpy(eth_q->src.addr, g_ap_netif->hwaddr, ETH_HWADDR_LEN);
                     memcpy(&arp_q->dhwaddr, real_client_mac, ETH_HWADDR_LEN);
 
                     g_ap_netif->linkoutput(g_ap_netif, q);
@@ -302,36 +359,9 @@ static err_t mac_nat_sta_input(struct pbuf *p, struct netif *netif) {
             }
         }
     }
-    // Case 2: Incoming IPv4 Data
-    else if (type == ETHTYPE_IP) {
-        struct ip_hdr *iphdr = (struct ip_hdr *)((uint8_t *)p->payload + SIZEOF_ETH_HDR);
-        uint32_t dest_ip = iphdr->dest.addr;
-
-        uint8_t *real_client_mac = lookup_nat_table(dest_ip);
-        if (real_client_mac != NULL && g_ap_netif != NULL) {
-            struct pbuf *q = pbuf_alloc(PBUF_RAW_TX, p->tot_len, PBUF_RAM);
-			if (!q) {
-				pbuf_free(p);
-				return ERR_MEM;
-			}
-
-            if (q != NULL) {
-                pbuf_copy(q, p);
-                struct eth_hdr *eth_q = (struct eth_hdr *)q->payload;
-
-                memcpy(eth_q->dest.addr, real_client_mac, ETH_HWADDR_LEN);
-
-                g_ap_netif->linkoutput(g_ap_netif, q);
-                pbuf_free(q);
-            }
-            pbuf_free(p);
-            return ERR_OK;
-        }
-    }
 
     return original_sta_input(p, netif);
 }
-
 // -------------------------------------------------------------------
 // 3. System Initialization (AP+STA Startup + Hook Injection)
 // -------------------------------------------------------------------
