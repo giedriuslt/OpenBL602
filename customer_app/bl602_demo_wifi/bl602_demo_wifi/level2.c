@@ -109,36 +109,41 @@ static void send_proxy_arp_reply(struct netif *sta_netif,
                                  uint32_t req_src_ip, 
                                  uint32_t target_ip) 
 {
-    // Allocate buffer for Ethernet (14 bytes) + ARP Header (28 bytes)
-    u16_t frame_len = SIZEOF_ETH_HDR + SIZEOF_ETHARP_HDR;
-    struct pbuf *p = pbuf_alloc(PBUF_RAW_TX, frame_len, PBUF_RAM);
+    // 1. Allocate pbuf at PBUF_LINK layer for ARP header size only.
+    // This guarantees hardware encapsulation headroom for the BL602 driver.
+    struct pbuf *p = pbuf_alloc(PBUF_LINK, SIZEOF_ETHARP_HDR, PBUF_RAM);
     if (!p) return;
 
-    struct eth_hdr *eth = (struct eth_hdr *)p->payload;
-    struct etharp_hdr *arp = (struct etharp_hdr *)((uint8_t *)p->payload + SIZEOF_ETH_HDR);
-
-    // 1. Fill Ethernet Header
-    memcpy(eth->dest.addr, req_src_mac, ETH_HWADDR_LEN); // Send back to requester
-    memcpy(eth->src.addr, sta_netif->hwaddr, ETH_HWADDR_LEN); // BL602 STA MAC
-    eth->type = lwip_htons(ETHTYPE_ARP);
-
-    // 2. Fill ARP Header (ARP Reply = Opcode 2)
-    arp->hwtype = lwip_htons(1); // Ethernet
-    arp->proto  = lwip_htons(ETHTYPE_IP);
-    arp->hwlen  = ETH_HWADDR_LEN;
+    // 2. Fill ARP Payload (p->payload initially points to ARP header)
+    struct etharp_hdr *arp = (struct etharp_hdr *)p->payload;
+    arp->hwtype   = lwip_htons(1);          // Ethernet
+    arp->proto    = lwip_htons(ETHTYPE_IP); // IPv4
+    arp->hwlen    = ETH_HWADDR_LEN;
     arp->protolen = 4;
-    arp->opcode  = lwip_htons(ARP_REPLY);
+    arp->opcode   = lwip_htons(ARP_REPLY);
 
-    // SHA: BL602 STA MAC (Proxying for downstream client)
+    // SHA: BL602 STA MAC (proxying for downstream client)
     memcpy(&arp->shwaddr, sta_netif->hwaddr, ETH_HWADDR_LEN);
     memcpy(&arp->sipaddr, &target_ip, 4);
 
-    // THA: Requester MAC
+    // THA: Upstream Requester MAC & IP
     memcpy(&arp->dhwaddr, req_src_mac, ETH_HWADDR_LEN);
     memcpy(&arp->dipaddr, &req_src_ip, 4);
 
-    // 3. Transmit directly via STA driver linkoutput
-    sta_netif->linkoutput(sta_netif, p);
+    // 3. Move payload pointer backward by 14 bytes to accommodate Ethernet Header
+    if (pbuf_header(p, SIZEOF_ETH_HDR) != 0) {
+        pbuf_free(p);
+        return;
+    }
+
+    // 4. Fill Ethernet Header (p->payload now points to Ethernet header start)
+    struct eth_hdr *eth = (struct eth_hdr *)p->payload;
+    memcpy(eth->dest.addr, req_src_mac, ETH_HWADDR_LEN);
+    memcpy(eth->src.addr, sta_netif->hwaddr, ETH_HWADDR_LEN);
+    eth->type = lwip_htons(ETHTYPE_ARP);
+
+    // 5. Transmit out STA driver linkoutput and release pbuf
+    original_sta_linkoutput(sta_netif, p);
     pbuf_free(p);
 }
 
@@ -221,6 +226,15 @@ static err_t mac_nat_ap_input(struct pbuf *p, struct netif *netif) {
         }
     } else if (type == ETHTYPE_ARP) {
         struct etharp_hdr *arphdr = (struct etharp_hdr *)((uint8_t *)q->payload + SIZEOF_ETH_HDR);
+		uint32_t target_ip;
+		memcpy(&target_ip, &arphdr->dipaddr, sizeof(target_ip));
+
+		// If ARP target is the BL602 AP interface IP itself, pass to local stack
+		if (target_ip == netif_ip4_addr(netif)->addr) {
+			pbuf_free(q);
+			return original_ap_input(p, netif);
+		}
+	
         uint32_t src_ip;
         memcpy(&src_ip, &arphdr->sipaddr, sizeof(src_ip));
         
