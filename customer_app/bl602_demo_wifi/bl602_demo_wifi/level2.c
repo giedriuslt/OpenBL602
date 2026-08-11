@@ -103,51 +103,6 @@ static void update_nat_table(uint32_t ip, const uint8_t *mac) {
     }
 }
 
-// Helper: Send a Proxy ARP Reply on behalf of a downstream client
-static void send_proxy_arp_reply(struct netif *sta_netif, 
-                                 const uint8_t *req_src_mac, 
-                                 uint32_t req_src_ip, 
-                                 uint32_t target_ip) 
-{
-    // 1. Allocate pbuf at PBUF_LINK layer for ARP header size only.
-    // This guarantees hardware encapsulation headroom for the BL602 driver.
-    struct pbuf *p = pbuf_alloc(PBUF_LINK, SIZEOF_ETHARP_HDR, PBUF_RAM);
-    if (!p) return;
-
-    // 2. Fill ARP Payload (p->payload initially points to ARP header)
-    struct etharp_hdr *arp = (struct etharp_hdr *)p->payload;
-    arp->hwtype   = lwip_htons(1);          // Ethernet
-    arp->proto    = lwip_htons(ETHTYPE_IP); // IPv4
-    arp->hwlen    = ETH_HWADDR_LEN;
-    arp->protolen = 4;
-    arp->opcode   = lwip_htons(ARP_REPLY);
-
-    // SHA: BL602 STA MAC (proxying for downstream client)
-    memcpy(&arp->shwaddr, sta_netif->hwaddr, ETH_HWADDR_LEN);
-    memcpy(&arp->sipaddr, &target_ip, 4);
-
-    // THA: Upstream Requester MAC & IP
-    memcpy(&arp->dhwaddr, req_src_mac, ETH_HWADDR_LEN);
-    memcpy(&arp->dipaddr, &req_src_ip, 4);
-
-    // 3. Move payload pointer backward by 14 bytes to accommodate Ethernet Header
-    if (pbuf_header(p, SIZEOF_ETH_HDR) != 0) {
-        pbuf_free(p);
-        return;
-    }
-
-    // 4. Fill Ethernet Header (p->payload now points to Ethernet header start)
-    struct eth_hdr *eth = (struct eth_hdr *)p->payload;
-    memcpy(eth->dest.addr, req_src_mac, ETH_HWADDR_LEN);
-    memcpy(eth->src.addr, sta_netif->hwaddr, ETH_HWADDR_LEN);
-    eth->type = lwip_htons(ETHTYPE_ARP);
-
-    // 5. Transmit out STA driver linkoutput and release pbuf
-    original_sta_linkoutput(sta_netif, p);
-    pbuf_free(p);
-}
-
-
 // Helper: Lookup client MAC address from target IP
 static uint8_t* lookup_nat_table(uint32_t ip) {
     for (int i = 0; i < MAX_NAT_ENTRIES; i++) {
@@ -158,6 +113,44 @@ static uint8_t* lookup_nat_table(uint32_t ip) {
     return NULL;
 }
 
+// Helper: Send a Proxy ARP Reply on behalf of a downstream client
+static void send_proxy_arp_reply(struct netif *sta_netif, 
+                                 const uint8_t *req_src_mac, 
+                                 uint32_t req_src_ip, 
+                                 uint32_t target_ip) 
+{
+    u16_t frame_len = SIZEOF_ETH_HDR + SIZEOF_ETHARP_HDR;
+    struct pbuf *p = pbuf_alloc(PBUF_RAW_TX, frame_len, PBUF_RAM);
+    if (!p) return;
+	
+	printf("sending arp reply\r\n");
+
+    struct eth_hdr *eth = (struct eth_hdr *)p->payload;
+    struct etharp_hdr *arp = (struct etharp_hdr *)((uint8_t *)p->payload + SIZEOF_ETH_HDR);
+
+    // Ethernet Header: Target = Requester MAC, Source = BL602 STA MAC
+    memcpy(eth->dest.addr, req_src_mac, ETH_HWADDR_LEN);
+    memcpy(eth->src.addr, sta_netif->hwaddr, ETH_HWADDR_LEN);
+    eth->type = lwip_htons(ETHTYPE_ARP);
+
+    // ARP Header
+    arp->hwtype   = lwip_htons(1);
+    arp->proto    = lwip_htons(ETHTYPE_IP);
+    arp->hwlen    = ETH_HWADDR_LEN;
+    arp->protolen = 4;
+    arp->opcode   = lwip_htons(ARP_REPLY);
+
+    // Proxy Sender Info (BL602 STA MAC + Client IP)
+    memcpy(&arp->shwaddr, sta_netif->hwaddr, ETH_HWADDR_LEN);
+    memcpy(&arp->sipaddr, &target_ip, 4);
+
+    // Requester Target Info
+    memcpy(&arp->dhwaddr, req_src_mac, ETH_HWADDR_LEN);
+    memcpy(&arp->dipaddr, &req_src_ip, 4);
+
+    original_sta_linkoutput(sta_netif, p);
+    pbuf_free(p);
+}
 // -------------------------------------------------------------------
 
 // 1. Outbound Hook (SoftAP Clients -> BL602 -> Upstream STA Router)
