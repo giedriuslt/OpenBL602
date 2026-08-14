@@ -91,7 +91,7 @@ static void log_icmp_packet(const char *dir, struct pbuf *p) {
 }
 
 static void log_dhcp_packet(const char *dir, struct pbuf *p) {
-    if (!p || p->len < SIZEOF_ETH_HDR + SIZEOF_IPH + sizeof(struct udp_hdr) + 44) return;
+    if (!p || p->len < SIZEOF_ETH_HDR + SIZEOF_IPH + sizeof(struct udp_hdr) + 240) return;
 
     struct eth_hdr *eth = (struct eth_hdr *)p->payload;
     if (lwip_ntohs(eth->type) != ETHTYPE_IP) return;
@@ -100,8 +100,6 @@ static void log_dhcp_packet(const char *dir, struct pbuf *p) {
     if (IPH_PROTO(iphdr) != 17) return; // Not UDP
 
     uint16_t ip_hdr_len = IPH_HL(iphdr) * 4;
-    if (p->len < SIZEOF_ETH_HDR + ip_hdr_len + sizeof(struct udp_hdr) + 44) return;
-
     struct udp_hdr *udphdr = (struct udp_hdr *)((uint8_t *)iphdr + ip_hdr_len);
     uint16_t src_port = lwip_ntohs(udphdr->src);
     uint16_t dst_port = lwip_ntohs(udphdr->dest);
@@ -110,18 +108,27 @@ static void log_dhcp_packet(const char *dir, struct pbuf *p) {
     if (src_port != 67 && src_port != 68 && dst_port != 67 && dst_port != 68) return;
 
     uint8_t *dhcp = (uint8_t *)udphdr + sizeof(struct udp_hdr);
-    
-    uint32_t xid;
-    memcpy(&xid, dhcp + 4, 4);
-    xid = lwip_ntohl(xid);
 
-    uint32_t yiaddr;
-    memcpy(&yiaddr, dhcp + 16, 4);
+    uint8_t op = dhcp[0];
+    
+    uint32_t xid; 
+    memcpy(&xid, dhcp + 4, 4); 
+    xid = lwip_ntohl(xid);
+    
+    uint16_t flags; 
+    memcpy(&flags, dhcp + 10, 2); 
+    flags = lwip_ntohs(flags);
+
+    char ciaddr[16], yiaddr[16], siaddr[16], giaddr[16];
+    ip4addr_ntoa_r((const ip4_addr_t *)(dhcp + 12), ciaddr, sizeof(ciaddr));
+    ip4addr_ntoa_r((const ip4_addr_t *)(dhcp + 16), yiaddr, sizeof(yiaddr));
+    ip4addr_ntoa_r((const ip4_addr_t *)(dhcp + 20), siaddr, sizeof(siaddr));
+    ip4addr_ntoa_r((const ip4_addr_t *)(dhcp + 24), giaddr, sizeof(giaddr));
 
     uint8_t *chaddr = dhcp + 28;
 
     // Parse DHCP Option 53 (Message Type)
-    const char *msg_type_str = "DHCP";
+    const char *msg_type_str = "UNKNOWN";
     uint16_t dhcp_len = p->len - (SIZEOF_ETH_HDR + ip_hdr_len + sizeof(struct udp_hdr));
     if (dhcp_len >= 240) { // Magic cookie offset
         uint8_t *options = dhcp + 240;
@@ -131,42 +138,47 @@ static void log_dhcp_packet(const char *dir, struct pbuf *p) {
             if (options[i] == 255) break; // END Option
             if (options[i] == 0) { i++; continue; } // PAD Option
             if (i + 1 >= opt_len) break;
+            
             uint8_t code = options[i];
             uint8_t len = options[i+1];
             if (i + 2 + len > opt_len) break;
 
             if (code == 53 && len == 1) {
-                uint8_t msg_type = options[i+2];
-                switch (msg_type) {
+                switch (options[i+2]) {
                     case 1: msg_type_str = "DISCOVER"; break;
                     case 2: msg_type_str = "OFFER"; break;
                     case 3: msg_type_str = "REQUEST"; break;
                     case 4: msg_type_str = "DECLINE"; break;
                     case 5: msg_type_str = "ACK"; break;
                     case 6: msg_type_str = "NAK"; break;
-                    default: msg_type_str = "DHCP_OTHER"; break;
+                    case 7: msg_type_str = "RELEASE"; break;
+                    case 8: msg_type_str = "INFORM"; break;
                 }
-                break;
             }
             i += 2 + len;
         }
     }
 
-    char src_ip[16], dst_ip[16], offer_ip[16];
+    char src_ip[16], dst_ip[16];
     ip4addr_ntoa_r((const ip4_addr_t *)&iphdr->src, src_ip, sizeof(src_ip));
     ip4addr_ntoa_r((const ip4_addr_t *)&iphdr->dest, dst_ip, sizeof(dst_ip));
-    ip4addr_ntoa_r((const ip4_addr_t *)&yiaddr, offer_ip, sizeof(offer_ip));
 
-    printf("\n>>> [%s] %s <<<\n"
-           "  L2 MAC : %02X:%02X:%02X:%02X:%02X:%02X -> %02X:%02X:%02X:%02X:%02X:%02X\n"
-           "  L3 IP  : %s -> %s\n"
-           "  DHCP   : XID=0x%08X | chaddr=%02X:%02X:%02X:%02X:%02X:%02X | yiaddr=%s\n",
-           dir, msg_type_str,
+    printf("\n========== FULL DHCP PACKET DUMP ==========\n");
+    printf("Direction : %s\n", dir);
+    printf("Type      : %s (Op: %d)\n", msg_type_str, op);
+    printf("L2 MACs   : %02X:%02X:%02X:%02X:%02X:%02X -> %02X:%02X:%02X:%02X:%02X:%02X\n",
            eth->src.addr[0], eth->src.addr[1], eth->src.addr[2], eth->src.addr[3], eth->src.addr[4], eth->src.addr[5],
-           eth->dest.addr[0], eth->dest.addr[1], eth->dest.addr[2], eth->dest.addr[3], eth->dest.addr[4], eth->dest.addr[5],
-           src_ip, dst_ip, (unsigned int)xid,
-           chaddr[0], chaddr[1], chaddr[2], chaddr[3], chaddr[4], chaddr[5],
-           offer_ip);
+           eth->dest.addr[0], eth->dest.addr[1], eth->dest.addr[2], eth->dest.addr[3], eth->dest.addr[4], eth->dest.addr[5]);
+    printf("L3 IPs    : %s:%d -> %s:%d\n", src_ip, src_port, dst_ip, dst_port);
+    printf("Flags     : 0x%04X (Broadcast requested: %s)\n", flags, (flags & 0x8000) ? "YES" : "NO");
+    printf("XID       : 0x%08X\n", (unsigned int)xid);
+    printf("ciaddr    : %s\n", ciaddr);
+    printf("yiaddr    : %s\n", yiaddr);
+    printf("siaddr    : %s\n", siaddr);
+    printf("giaddr    : %s\n", giaddr);
+    printf("chaddr    : %02X:%02X:%02X:%02X:%02X:%02X\n", 
+           chaddr[0], chaddr[1], chaddr[2], chaddr[3], chaddr[4], chaddr[5]);
+    printf("===========================================\n");
 }
 
 // Helper: Update or insert a MAC-to-IP mapping
@@ -288,7 +300,7 @@ static err_t mac_nat_ap_input(struct pbuf *p, struct netif *netif) {
 
     // Allocate copy for forwarding upstream over STA interface
     struct pbuf *q = pbuf_alloc(PBUF_RAW_TX, p->tot_len, PBUF_RAM);
-    if (q) {
+	if (q) {
         pbuf_copy(q, p);
         struct eth_hdr *eth_q = (struct eth_hdr *)q->payload;
 
@@ -299,6 +311,28 @@ static err_t mac_nat_ap_input(struct pbuf *p, struct netif *netif) {
 
         // Rewrite L2 Source MAC to STA MAC for upstream transmission
         memcpy(eth_q->src.addr, g_sta_netif->hwaddr, ETH_HWADDR_LEN);
+
+        // --- NEW FIX: Force DHCP Broadcast Flag ---
+        if (is_dhcp_request) {
+            struct ip_hdr *iphdr_q = (struct ip_hdr *)((uint8_t *)q->payload + SIZEOF_ETH_HDR);
+            uint16_t ip_hdr_len_q = IPH_HL(iphdr_q) * 4;
+            struct udp_hdr *udphdr_q = (struct udp_hdr *)((uint8_t *)iphdr_q + ip_hdr_len_q);
+            
+            // Offset to DHCP payload
+            uint8_t *dhcp_payload = (uint8_t *)udphdr_q + sizeof(struct udp_hdr);
+
+            // Read, modify, and write the DHCP flags (offset 10)
+            uint16_t flags;
+            memcpy(&flags, dhcp_payload + 10, 2);
+            flags = lwip_ntohs(flags) | 0x8000; // Force broadcast bit
+            flags = lwip_htons(flags);
+            memcpy(dhcp_payload + 10, &flags, 2);
+
+            // Zero out UDP checksum because we altered the UDP payload 
+            // (0 means "no checksum" in IPv4 UDP, which is perfectly valid for DHCP)
+            udphdr_q->chksum = 0;
+        }
+        // ------------------------------------------
 
         original_sta_linkoutput(g_sta_netif, q);
         pbuf_free(q);
@@ -324,7 +358,7 @@ static err_t mac_nat_sta_input(struct pbuf *p, struct netif *netif) {
     if (!p || !p->payload) return original_sta_input(p, netif);
 
     // LOG ALL OUTBOUND DHCP PACKETS
-    log_dhcp_packet("OUTBOUND AP->STA", p);
+    log_dhcp_packet("INBOUND STA->AP", p);
 	
 	log_icmp_packet("INBOUND STA->AP", p);
 	
