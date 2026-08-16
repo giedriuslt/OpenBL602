@@ -2,10 +2,58 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "easyflash.h"
+
+// Bouffalo Lab IoT SDK Specific Includes
+#include <wifi_mgmr_ext.h>
+#include <bl_wifi.h>
+#include <bl_sys.h>
+
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
 #include <stdlib.h>
+
+// --- Real bl_iot_sdk Diagnostic Mappings ---
+
+static int get_upstream_rssi(void) {
+    int rssi = -100;
+    // Retrieves the RSSI of the currently connected upstream AP
+    wifi_mgmr_rssi_get(&rssi);
+    return rssi;
+}
+
+static const char* get_upstream_ip(void) {
+    static char ip_str[16];
+    uint32_t ip = 0;
+    uint32_t gw = 0;
+    uint32_t mask = 0;
+    
+    // Extracts actual Wi-Fi operational configurations from the manager
+    wifi_mgmr_sta_ip_get(&ip, &gw, &mask);
+    
+    snprintf(ip_str, sizeof(ip_str), "%d.%d.%d.%d",
+             (int)(ip & 0xFF), 
+             (int)((ip >> 8) & 0xFF), 
+             (int)((ip >> 16) & 0xFF), 
+             (int)((ip >> 24) & 0xFF));
+    return ip_str;
+}
+
+static int get_connected_client_count(void) {
+    uint8_t sta_num = 0;
+    // Fetches how many client stations are attached to this node's AP
+    wifi_mgmr_ap_sta_cnt_get(&sta_num);
+    return sta_num;
+}
+
+static uint32_t get_free_heap_size(void) {
+    return xPortGetFreeHeapSize();
+}
+
+static uint32_t get_system_uptime_sec(void) {
+    // Converts FreeRTOS kernel ticks to raw operational execution seconds
+    return xTaskGetTickCount() / configTICK_RATE_HZ;
+}
 
 // Helper function to safely read EasyFlash env variables into local buffers immediately
 static void get_env_str(const char *key, char *dst, size_t max_len, const char *default_val) {
@@ -19,7 +67,6 @@ static void get_env_str(const char *key, char *dst, size_t max_len, const char *
     }
 }
 
-// Helper function to convert a single hex character to its integer value
 static int hex_to_val(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -98,8 +145,8 @@ static void http_server_task(void *pvParameters) {
 
     listen(server_fd, 5);
 
-    char *rx_buf = pvPortMalloc(1024);
-    char *body = pvPortMalloc(1024);
+    char *rx_buf = pvPortMalloc(2048);
+    char *body = pvPortMalloc(2048);
     char header[128];
 
     if (!rx_buf || !body) {
@@ -114,8 +161,8 @@ static void http_server_task(void *pvParameters) {
         int client_fd = accept(server_fd, NULL, NULL);
         if (client_fd < 0) continue;
 
-        memset(rx_buf, 0, 1024);
-        int read_len = read(client_fd, rx_buf, 1023);
+        memset(rx_buf, 0, 2048);
+        int read_len = read(client_fd, rx_buf, 2047);
 
         if (read_len > 0) {
             rx_buf[read_len] = '\0';
@@ -127,6 +174,8 @@ static void http_server_task(void *pvParameters) {
                 continue;
             }
 
+            bool is_stats_page = (strstr(rx_buf, "GET /stats") != NULL);
+
             if (strncmp(rx_buf, "POST", 4) == 0) {
                 char *body_start = strstr(rx_buf, "\r\n\r\n");
                 if (body_start) {
@@ -134,19 +183,15 @@ static void http_server_task(void *pvParameters) {
                     char val_buf[64];
 
                     if (get_form_field(body_start, "UpstreamSSID", val_buf, sizeof(val_buf))) {
-                        printf("saving... %s\n", val_buf);
                         ef_set_env("UpstreamSSID", val_buf);
                     }
                     if (get_form_field(body_start, "UpstreamPSK", val_buf, sizeof(val_buf))) {
-                        printf("saving... %s\n", val_buf);
                         ef_set_env("UpstreamPSK", val_buf);
                     }
                     if (get_form_field(body_start, "DeviceSSID", val_buf, sizeof(val_buf))) {
-                        printf("saving... %s\n", val_buf);
                         ef_set_env("DeviceSSID", val_buf);
                     }
                     if (get_form_field(body_start, "DevicePSK", val_buf, sizeof(val_buf))) {
-                        printf("saving... %s\n", val_buf);
                         ef_set_env("DevicePSK", val_buf);
                     }
 
@@ -157,44 +202,79 @@ static void http_server_task(void *pvParameters) {
                 }
             }
 
-            // Dedicated local stack buffers to copy static EasyFlash values immediately
-            char up_ssid[33];
-            char up_psk[65];
-            char dev_ssid[33];
-            char dev_psk[65];
-            char enable_ui[4];
+            int body_len = 0;
 
-            get_env_str("UpstreamSSID", up_ssid, sizeof(up_ssid), "");
-            get_env_str("UpstreamPSK", up_psk, sizeof(up_psk), "");
-            get_env_str("DeviceSSID", dev_ssid, sizeof(dev_ssid), "BL602_Node");
-            get_env_str("DevicePSK", dev_psk, sizeof(dev_psk), "12345678");
-            get_env_str("EnableUI", enable_ui, sizeof(enable_ui), "0");
+            if (is_stats_page) {
+                // --- DIAGNOSTICS PAGE (/stats) ---
+                body_len = snprintf(body, 2048,
+                    "<!DOCTYPE html><html><head><meta http-equiv=\"refresh\" content=\"5\"></head><body>"
+                    "<h2>Device Diagnostics & Live Statistics</h2>"
+                    "<p><a href=\"/\">&larr; Back to Settings</a> (Auto-refreshing every 5s)</p>"
+                    
+                    "<h3>Upstream Connection</h3>"
+                    "<table border=\"1\" cellpadding=\"5\" cellspacing=\"0\">"
+                    "  <tr><td><b>Connected IP:</b></td><td>%s</td></tr>"
+                    "  <tr><td><b>Signal Strength (RSSI):</b></td><td>%d dBm</td></tr>"
+                    "</table>"
+                    
+                    "<h3>Local Access Point Status</h3>"
+                    "<table border=\"1\" cellpadding=\"5\" cellspacing=\"0\">"
+                    "  <tr><td><b>Active Client Connections:</b></td><td>%d devices</td></tr>"
+                    "</table>"
 
-            bool is_ui_enabled = (strcmp(enable_ui, "1") == 0);
+                    "<h3>System Performance</h3>"
+                    "<table border=\"1\" cellpadding=\"5\" cellspacing=\"0\">"
+                    "  <tr><td><b>Free Heap Memory:</b></td><td>%u bytes</td></tr>"
+                    "  <tr><td><b>System Uptime:</b></td><td>%u seconds</td></tr>"
+                    "</table>"
+                    "</body></html>",
+                    get_upstream_ip(),
+                    get_upstream_rssi(),
+                    get_connected_client_count(),
+                    get_free_heap_size(),
+                    get_system_uptime_sec()
+                );
+            } else {
+                // --- CONFIGURATION PAGE (/) ---
+                char up_ssid[33];
+                char up_psk[65];
+                char dev_ssid[33];
+                char dev_psk[65];
+                char enable_ui[4];
 
-            int body_len = snprintf(body, 1024,
-                "<!DOCTYPE html><html><body>"
-                "<h2>BL602 Wi-Fi & Device Settings</h2>"
-                "<form action=\"/\" method=\"post\">"
-                "  <h3>Upstream Network (Client)</h3>"
-                "  <label>SSID:</label><br>"
-                "  <input type=\"text\" name=\"UpstreamSSID\" value=\"%s\"><br>"
-                "  <label>Password:</label><br>"
-                "  <input type=\"password\" name=\"UpstreamPSK\" value=\"%s\"><br><br>"
-                "  <h3>Local Access Point (AP)</h3>"
-                "  <label>Device SSID:</label><br>"
-                "  <input type=\"text\" name=\"DeviceSSID\" value=\"%s\"><br>"
-                "  <label>Device Password:</label><br>"
-                "  <input type=\"password\" name=\"DevicePSK\" value=\"%s\"><br><br>"
-                "  <h3>UI Settings</h3>"
-                "  <input type=\"checkbox\" name=\"EnableUI\" value=\"1\" %s>"
-                "  <label for=\"EnableUI\"> Enable Web UI</label><br><br>"
-                "  <input type=\"submit\" value=\"Save Settings\">"
-                "</form>"
-                "</body></html>",
-                up_ssid, up_psk, dev_ssid, dev_psk,
-                is_ui_enabled ? "checked" : ""
-            );
+                get_env_str("UpstreamSSID", up_ssid, sizeof(up_ssid), "");
+                get_env_str("UpstreamPSK", up_psk, sizeof(up_psk), "");
+                get_env_str("DeviceSSID", dev_ssid, sizeof(dev_ssid), "BL602_Node");
+                get_env_str("DevicePSK", dev_psk, sizeof(dev_psk), "12345678");
+                get_env_str("EnableUI", enable_ui, sizeof(enable_ui), "0");
+
+                bool is_ui_enabled = (strcmp(enable_ui, "1") == 0);
+
+                body_len = snprintf(body, 2048,
+                    "<!DOCTYPE html><html><body>"
+                    "<h2>BL602 Wi-Fi & Device Settings</h2>"
+                    "<p><a href=\"/stats\"><b>View Live Diagnostics & Stats &rarr;</b></a></p>"
+                    "<form action=\"/\" method=\"post\">"
+                    "  <h3>Upstream Network (Client)</h3>"
+                    "  <label>SSID:</label><br>"
+                    "  <input type=\"text\" name=\"UpstreamSSID\" value=\"%s\"><br>"
+                    "  <label>Password:</label><br>"
+                    "  <input type=\"password\" name=\"UpstreamPSK\" value=\"%s\"><br><br>"
+                    "  <h3>Local Access Point (AP)</h3>"
+                    "  <label>Device SSID:</label><br>"
+                    "  <input type=\"text\" name=\"DeviceSSID\" value=\"%s\"><br>"
+                    "  <label>Device Password:</label><br>"
+                    "  <input type=\"password\" name=\"DevicePSK\" value=\"%s\"><br><br>"
+                    "  <h3>UI Settings</h3>"
+                    "  <input type=\"checkbox\" name=\"EnableUI\" value=\"1\" %s>"
+                    "  <label for=\"EnableUI\"> Enable Web UI</label><br><br>"
+                    "  <input type=\"submit\" value=\"Save Settings\">"
+                    "</form>"
+                    "</body></html>",
+                    up_ssid, up_psk, dev_ssid, dev_psk,
+                    is_ui_enabled ? "checked" : ""
+                );
+            }
 
             int header_len = snprintf(header, sizeof(header),
                 "HTTP/1.1 200 OK\r\n"
