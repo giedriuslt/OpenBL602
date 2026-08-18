@@ -28,22 +28,22 @@ static struct netif *g_sta_netif = NULL;
 void dump_all_netifs(void) {
     struct netif *curr;
 
-    printf("\n=== Dumping Registered lwIP Interfaces ===\n");
+    printf("\n=== Dumping Registered lwIP Interfaces ===\r\n");
     if (netif_list == NULL) {
-        printf("No netif interfaces registered yet!\n");
+        printf("No netif interfaces registered yet!\r\n");
         return;
     }
 
     for (curr = netif_list; curr != NULL; curr = curr->next) {
-        printf("Interface: %c%c%d\n", curr->name[0], curr->name[1], curr->num);
-        printf("  - Address: %p\n", (void *)curr);
-        printf("  - Flags  : 0x%02X (Up: %s, Link Up: %s)\n",
+        printf("Interface: %c%c%d\r\n", curr->name[0], curr->name[1], curr->num);
+        printf("  - Address: %p\r\n", (void *)curr);
+        printf("  - Flags  : 0x%02X (Up: %s, Link Up: %s)\r\n",
                curr->flags,
                netif_is_up(curr) ? "YES" : "NO",
                netif_is_link_up(curr) ? "YES" : "NO");
-        printf("  - IP     : %s\n", ipaddr_ntoa(&curr->ip_addr));
+        printf("  - IP     : %s\r\n", ipaddr_ntoa(&curr->ip_addr));
     }
-    printf("=========================================\n\n");
+    printf("=========================================\n\r\n");
 }
 
 // Mapping table entry for tracking client MACs behind the BL602
@@ -65,6 +65,43 @@ static inline int is_mcast_or_bcast_mac(const uint8_t *mac) {
     return (mac[0] & 0x01) != 0;
 }
 
+
+static void log_arp_packet(const char *dir, struct pbuf *p) {
+    if (!p || p->len < SIZEOF_ETH_HDR + sizeof(struct etharp_hdr)) return;
+
+    struct eth_hdr *eth = (struct eth_hdr *)p->payload;
+    if (lwip_ntohs(eth->type) != ETHTYPE_ARP) return;
+
+    struct etharp_hdr *arp = (struct etharp_hdr *)((uint8_t *)p->payload + SIZEOF_ETH_HDR);
+    uint16_t opcode = lwip_ntohs(arp->opcode);
+
+    uint32_t sip, dip;
+    memcpy(&sip, &arp->sipaddr, sizeof(sip));
+    memcpy(&dip, &arp->dipaddr, sizeof(dip));
+
+    char sip_str[16], dip_str[16];
+    ip4addr_ntoa_r((const ip4_addr_t *)&sip, sip_str, sizeof(sip_str));
+    ip4addr_ntoa_r((const ip4_addr_t *)&dip, dip_str, sizeof(dip_str));
+
+    const char *op_str = (opcode == ARP_REQUEST) ? "REQUEST" :
+                         (opcode == ARP_REPLY)   ? "REPLY"   : "UNKNOWN";
+
+    printf("[%s ARP %s]\r\n", dir, op_str);
+    printf("  L2 Frame : %02X:%02X:%02X:%02X:%02X:%02X -> %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+           eth->src.addr[0], eth->src.addr[1], eth->src.addr[2],
+           eth->src.addr[3], eth->src.addr[4], eth->src.addr[5],
+           eth->dest.addr[0], eth->dest.addr[1], eth->dest.addr[2],
+           eth->dest.addr[3], eth->dest.addr[4], eth->dest.addr[5]);
+    printf("  ARP Body : %s (%02X:%02X:%02X:%02X:%02X:%02X) -> %s (%02X:%02X:%02X:%02X:%02X:%02X)\r\n",
+           sip_str,
+           arp->shwaddr.addr[0], arp->shwaddr.addr[1], arp->shwaddr.addr[2],
+           arp->shwaddr.addr[3], arp->shwaddr.addr[4], arp->shwaddr.addr[5],
+           dip_str,
+           arp->dhwaddr.addr[0], arp->dhwaddr.addr[1], arp->dhwaddr.addr[2],
+           arp->dhwaddr.addr[3], arp->dhwaddr.addr[4], arp->dhwaddr.addr[5]);
+}
+
+
 static void log_icmp_packet(const char *dir, struct pbuf *p) {
     if (p->len < SIZEOF_ETH_HDR + SIZEOF_IPH) return;
 
@@ -84,7 +121,7 @@ static void log_icmp_packet(const char *dir, struct pbuf *p) {
         const char *type_str = (icmp->type == ICMP_ECHO) ? "ECHO_REQ" :
                                (icmp->type == ICMP_ER)   ? "ECHO_REPLY" : "OTHER";
 
-        printf("[%s ICMP] %s | %s -> %s | ID: %d | Seq: %d\n",
+        printf("[%s ICMP] %s | %s -> %s | ID: %d | Seq: %d\r\n",
                dir, type_str, src_str, dst_str,
                lwip_ntohs(icmp->id), lwip_ntohs(icmp->seqno));
     }
@@ -163,22 +200,22 @@ static void log_dhcp_packet(const char *dir, struct pbuf *p) {
     ip4addr_ntoa_r((const ip4_addr_t *)&iphdr->src, src_ip, sizeof(src_ip));
     ip4addr_ntoa_r((const ip4_addr_t *)&iphdr->dest, dst_ip, sizeof(dst_ip));
 
-    printf("\n========== FULL DHCP PACKET DUMP ==========\n");
-    printf("Direction : %s\n", dir);
-    printf("Type      : %s (Op: %d)\n", msg_type_str, op);
-    printf("L2 MACs   : %02X:%02X:%02X:%02X:%02X:%02X -> %02X:%02X:%02X:%02X:%02X:%02X\n",
+    printf("\n========== FULL DHCP PACKET DUMP ==========\r\n");
+    printf("Direction : %s\r\n", dir);
+    printf("Type      : %s (Op: %d)\r\n", msg_type_str, op);
+    printf("L2 MACs   : %02X:%02X:%02X:%02X:%02X:%02X -> %02X:%02X:%02X:%02X:%02X:%02X\r\n",
            eth->src.addr[0], eth->src.addr[1], eth->src.addr[2], eth->src.addr[3], eth->src.addr[4], eth->src.addr[5],
            eth->dest.addr[0], eth->dest.addr[1], eth->dest.addr[2], eth->dest.addr[3], eth->dest.addr[4], eth->dest.addr[5]);
-    printf("L3 IPs    : %s:%d -> %s:%d\n", src_ip, src_port, dst_ip, dst_port);
-    printf("Flags     : 0x%04X (Broadcast requested: %s)\n", flags, (flags & 0x8000) ? "YES" : "NO");
-    printf("XID       : 0x%08X\n", (unsigned int)xid);
-    printf("ciaddr    : %s\n", ciaddr);
-    printf("yiaddr    : %s\n", yiaddr);
-    printf("siaddr    : %s\n", siaddr);
-    printf("giaddr    : %s\n", giaddr);
-    printf("chaddr    : %02X:%02X:%02X:%02X:%02X:%02X\n", 
+    printf("L3 IPs    : %s:%d -> %s:%d\r\n", src_ip, src_port, dst_ip, dst_port);
+    printf("Flags     : 0x%04X (Broadcast requested: %s)\r\n", flags, (flags & 0x8000) ? "YES" : "NO");
+    printf("XID       : 0x%08X\r\n", (unsigned int)xid);
+    printf("ciaddr    : %s\r\n", ciaddr);
+    printf("yiaddr    : %s\r\n", yiaddr);
+    printf("siaddr    : %s\r\n", siaddr);
+    printf("giaddr    : %s\r\n", giaddr);
+    printf("chaddr    : %02X:%02X:%02X:%02X:%02X:%02X\r\n", 
            chaddr[0], chaddr[1], chaddr[2], chaddr[3], chaddr[4], chaddr[5]);
-    printf("===========================================\n");
+    printf("===========================================\r\n");
 }
 
 // Helper: Update or insert a MAC-to-IP mapping
@@ -245,6 +282,8 @@ static err_t mac_nat_ap_input(struct pbuf *p, struct netif *netif) {
     log_dhcp_packet("OUTBOUND AP->STA", p);
 	
     log_icmp_packet("OUTBOUND AP->STA", p);
+	
+	log_arp_packet("OUTBOUND AP->STA", p);
 
     struct eth_hdr *eth = (struct eth_hdr *)p->payload;
     uint16_t type = lwip_ntohs(eth->type);
@@ -362,6 +401,8 @@ static err_t mac_nat_sta_input(struct pbuf *p, struct netif *netif) {
 	
 	log_icmp_packet("INBOUND STA->AP", p);
 	
+	log_arp_packet("INBOUND STA->AP", p);
+	
 
     struct eth_hdr *eth = (struct eth_hdr *)p->payload;
     uint16_t type = lwip_ntohs(eth->type);
@@ -466,12 +507,15 @@ static err_t mac_nat_sta_input(struct pbuf *p, struct netif *netif) {
             if (q) {
                 pbuf_copy(q, p);
                 struct eth_hdr *eth_q = (struct eth_hdr *)q->payload;
+				struct etharp_hdr *arp_q = (struct etharp_hdr *)((uint8_t *)q->payload + SIZEOF_ETH_HDR);
 
                 memcpy(eth_q->dest.addr, real_client_mac, ETH_HWADDR_LEN);
                 memcpy(eth_q->src.addr, g_ap_netif->hwaddr, ETH_HWADDR_LEN);
+				
+				//memcpy(&arp_q->shwaddr, g_ap_netif->hwaddr, ETH_HWADDR_LEN);
 
                 if (opcode == ARP_REPLY) {
-                    struct etharp_hdr *arp_q = (struct etharp_hdr *)((uint8_t *)q->payload + SIZEOF_ETH_HDR);
+                    
                     memcpy(&arp_q->dhwaddr, real_client_mac, ETH_HWADDR_LEN);
                 }
 
@@ -516,7 +560,7 @@ static err_t mac_nat_sta_input(struct pbuf *p, struct netif *netif) {
 void app_mac_nat_init(const char *upstream_ssid, const char *upstream_key,
                       const char *softap_ssid,   const char *softap_key) 
 {
-    printf("[MAC_NAT] Starting BL602 AP+STA Concurrent Mode...\n");
+    printf("[MAC_NAT] Starting BL602 AP+STA Concurrent Mode...\r\n");
 
     wifi_interface_t ap_interface = wifi_mgmr_ap_enable();
     wifi_mgmr_ap_start(ap_interface, (char *)softap_ssid, 0, (char *)softap_key, 6);
@@ -533,7 +577,7 @@ void app_mac_nat_init(const char *upstream_ssid, const char *upstream_key,
 
     if (sta_netif != NULL) {
         g_sta_netif = sta_netif;
-        printf("[MAC_NAT] Hooking lwIP netif for STA interface: %c%c%d\n", 
+        printf("[MAC_NAT] Hooking lwIP netif for STA interface: %c%c%d\r\n", 
                sta_netif->name[0], sta_netif->name[1], sta_netif->num);
 
         original_sta_linkoutput = sta_netif->linkoutput;
@@ -542,10 +586,10 @@ void app_mac_nat_init(const char *upstream_ssid, const char *upstream_key,
         original_sta_input = sta_netif->input;
         sta_netif->input   = mac_nat_sta_input;
 
-        printf("[MAC_NAT] L2 Translation Layer Active.\n");
+        printf("[MAC_NAT] L2 Translation Layer Active.\r\n");
     } else {
         dump_all_netifs();
-        printf("[MAC_NAT] Error: STA netif interface not found!\n");
+        printf("[MAC_NAT] Error: STA netif interface not found!\r\n");
     }
     
     struct netif *ap_netif = netif_find("ap2");
@@ -554,15 +598,15 @@ void app_mac_nat_init(const char *upstream_ssid, const char *upstream_key,
 
     if (ap_netif != NULL) {
         g_ap_netif = ap_netif;
-        printf("[MAC_NAT] Hooking lwIP netif for AP interface: %c%c%d\n", 
+        printf("[MAC_NAT] Hooking lwIP netif for AP interface: %c%c%d\r\n", 
                ap_netif->name[0], ap_netif->name[1], ap_netif->num);
 
         original_ap_input = ap_netif->input;
         ap_netif->input   = mac_nat_ap_input;
 
-        printf("[MAC_NAT] AP L2 Translation Layer Active.\n");
+        printf("[MAC_NAT] AP L2 Translation Layer Active.\r\n");
     } else {
         dump_all_netifs();
-        printf("[MAC_NAT] Error: AP netif interface not found!\n");
+        printf("[MAC_NAT] Error: AP netif interface not found!\r\n");
     }
 }
