@@ -61,6 +61,7 @@
 #include <bl_dma.h>
 #include <bl_timer.h>
 #include <bl_gpio_cli.h>
+#include <bl_wdt.h>
 #include <bl_wdt_cli.h>
 #include <hosal_uart.h>
 #include <hosal_adc.h>
@@ -84,6 +85,8 @@
 #include <libfdt.h>
 #include <blog.h>
 #include <bl_wps.h>
+#include "level2.h"
+#include "config_srv.h"
 
 #define mainHELLO_TASK_PRIORITY     ( 20 )
 #define UART_ID_2 (2)
@@ -489,7 +492,21 @@ static void event_cb_wifi_event(input_event_t *event, void *private_data)
         break;
         case CODE_WIFI_ON_AP_STA_DEL:
         {
-            printf("[APP] [EVT] [AP] [DEL] %lld, sta idx is %lu\r\n", aos_now_ms(), (uint32_t)event->value);
+            uint8_t sta_idx = (uint8_t)(uint32_t)event->value;
+            printf("[APP] [EVT] [AP] [DEL] %lld, sta idx is %u\r\n", aos_now_ms(), sta_idx);
+
+            wifi_sta_basic_info_t sta;
+            memset(&sta, 0, sizeof(sta));
+
+            // Fetch STA details before clearing from NAT table
+            if (wifi_mgmr_ap_sta_info_get((struct wifi_sta_basic_info *)&sta, sta_idx) == 0) {
+                remove_nat_entry_by_mac(sta.sta_mac);
+
+                printf("[APP] [EVT] [AP] [DEL] Purged NAT entry for MAC: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+                       sta.sta_mac[0], sta.sta_mac[1], sta.sta_mac[2],
+                       sta.sta_mac[3], sta.sta_mac[4], sta.sta_mac[5]);
+            }
+            break;
         }
         break;
         default:
@@ -853,14 +870,68 @@ int codex_debug_cli_init(void);
     looprt_test_cli_init();
 }
 
+// Helper function to safely read EasyFlash env variables into local buffers immediately
+static void get_env_str(const char *key, char *dst, size_t max_len, const char *default_val) {
+    const char *val = ef_get_env(key);
+    if (val && *val != '\0') {
+        strncpy(dst, val, max_len - 1);
+        dst[max_len - 1] = '\0';
+    } else {
+        strncpy(dst, default_val, max_len - 1);
+        dst[max_len - 1] = '\0';
+    }
+}
+
+
+static void watchdog_task(void *pvParameters) {
+    // 1. Retrieve current boot counter from EasyFlash env
+    char boot_str[16];
+    get_env_str("boot_count", boot_str, sizeof(boot_str), "0");
+    int boot_count = atoi(boot_str) + 1;
+
+    snprintf(boot_str, sizeof(boot_str), "%d", boot_count);
+    ef_set_env("boot_count", boot_str);
+
+    ef_save_env();
+
+    // 3. Configure hardware watchdog timer for 4096 ms
+    bl_wdt_init(4096);
+
+    uint32_t uptime_sec = 0;
+    bool reset_done = false;
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        uptime_sec++;
+		
+		// Feed the hardware watchdog timer
+        bl_wdt_feed();
+
+        // 4. Reset boot counter to zero after 10 seconds of stable boot
+        if (!reset_done && uptime_sec >= 10) {
+            ef_set_env("boot_count", "0");
+            ef_save_env();
+            reset_done = true;
+        }
+    }
+}
+
+void start_watchdog_task(void) {
+    // Priority lower than HTTP_Server (tskIDLE_PRIORITY + 1)
+    // CPU-bound infinite loops in HTTP thread will starve this task and trigger WDT reset
+    xTaskCreate(watchdog_task, "WDT_Task", 1024, NULL, tskIDLE_PRIORITY + 1, NULL);
+}
+
 static void proc_main_entry(void *pvParameters)
 {
     easyflash_init();
 
     _cli_init();
 
+
     aos_register_event_filter(EV_WIFI, event_cb_wifi_event, NULL);
     cmd_stack_wifi(NULL, 0, 0, NULL);
+
     vTaskDelete(NULL);
 }
 

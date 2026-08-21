@@ -12,9 +12,10 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include "level2.h"
 
 // Max client stations the BL602 SoftAP usually tracks internally
-#define AP_MAX_STA_COUNT 10
+#define AP_MAX_STA_COUNT 7
 
 
 static int get_upstream_rssi(void) {
@@ -137,6 +138,21 @@ static void http_server_task(void *pvParameters) {
     while (1) {
         int client_fd = accept(server_fd, NULL, NULL);
         if (client_fd < 0) continue;
+		
+		// Define a 5-second timeout structure
+		struct timeval timeout;
+		timeout.tv_sec = 5;       // 5 seconds
+		timeout.tv_usec = 0;      // 0 microseconds
+
+		// Set Receive Timeout
+		if (setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+			printf("Failed to set SO_RCVTIMEO on fd %d", client_fd);
+		}
+
+		// Set Send Timeout (Highly recommended so a stalled client can't block send() indefinitely)
+		if (setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) < 0) {
+			printf("Failed to set SO_SNDTIMEO on fd %d", client_fd);
+		}
 
         memset(chunk, 0, 1024);
         int read_len = read(client_fd, chunk, 1023);
@@ -215,7 +231,6 @@ static void http_server_task(void *pvParameters) {
                 );
                 send(client_fd, chunk, len, 0);
 
-                // Loop over device indices up to count threshold limit safely
                 int active_rows = 0;
                 for (uint8_t i = 0; i < AP_MAX_STA_COUNT; i++) {
                     wifi_sta_basic_info_t sta;
@@ -246,8 +261,32 @@ static void http_server_task(void *pvParameters) {
                     send(client_fd, no_clients, strlen(no_clients), 0);
                 }
 
-                const char *table_footer = "</table></body></html>";
+                const char *table_footer = "</table><br>";
                 send(client_fd, table_footer, strlen(table_footer), 0);
+				
+				sprintf_lwip_stats(chunk, 1024);
+				send(client_fd, chunk, strlen(chunk), 0);
+
+                // --- CHUNK 3: Network Traffic Log ---
+                const char *log_header = 
+                    "<h3>Packet Traffic Log (ICMP / ARP / DHCP)</h3>"
+                    "<pre style=\"background:#f4f4f4; border:1px solid #ccc; padding:10px; max-height:250px; overflow-y:scroll;\">";
+                send(client_fd, log_header, strlen(log_header), 0);
+
+                char *log_buf = pvPortMalloc(4096);
+                if (log_buf) {
+                    size_t log_bytes = net_log_read(log_buf, 4096);
+                    if (log_bytes > 0) {
+                        send(client_fd, log_buf, log_bytes, 0);
+                    } else {
+                        const char *empty_msg = "No traffic recorded yet.";
+                        send(client_fd, empty_msg, strlen(empty_msg), 0);
+                    }
+                    vPortFree(log_buf);
+                }
+
+                const char *page_footer = "</pre></body></html>";
+                send(client_fd, page_footer, strlen(page_footer), 0);
 
             } else {
                 // --- CONFIGURATION PAGE (/) ---

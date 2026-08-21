@@ -1,8 +1,11 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 #include <wifi_mgmr_ext.h>
 #include <FreeRTOS.h>
 #include <task.h>
+#include "easyflash.h"
+#include "semphr.h"
 #include "lwip/netif.h"
 #include "lwip/ip_addr.h"
 #include "lwip/pbuf.h"
@@ -11,6 +14,8 @@
 #include "lwip/prot/udp.h"
 #include "lwip/prot/etharp.h"
 #include "lwip/prot/ip4.h"
+#include "lwip/opt.h"
+#include "lwip/stats.h"
 
 #define MAX_NAT_ENTRIES 16
 
@@ -24,6 +29,177 @@
 
 static struct netif *g_ap_netif  = NULL;
 static struct netif *g_sta_netif = NULL;
+
+
+#define NET_LOG_BUF_SIZE 4096
+
+static char g_net_log_buf[NET_LOG_BUF_SIZE];
+static size_t g_log_head = 0;
+static size_t g_log_count = 0;
+static SemaphoreHandle_t g_log_mutex = NULL;
+
+// Helper function to safely read EasyFlash env variables into local buffers immediately
+static void get_env_str(const char *key, char *dst, size_t max_len, const char *default_val) {
+    const char *val = ef_get_env(key);
+    if (val && *val != '\0') {
+        strncpy(dst, val, max_len - 1);
+        dst[max_len - 1] = '\0';
+    } else {
+        strncpy(dst, default_val, max_len - 1);
+        dst[max_len - 1] = '\0';
+    }
+}
+
+static void net_log_init_mutex(void) {
+    if (!g_log_mutex) {
+        g_log_mutex = xSemaphoreCreateMutex();
+    }
+}
+
+// Write string to static rolling ring buffer
+static void net_log_write(const char *str) {
+    net_log_init_mutex();
+    if (xSemaphoreTake(g_log_mutex, pdMS_TO_TICKS(10)) != pdTRUE) return;
+
+    size_t len = strlen(str);
+    for (size_t i = 0; i < len; i++) {
+        g_net_log_buf[g_log_head] = str[i];
+        g_log_head = (g_log_head + 1) % NET_LOG_BUF_SIZE;
+        if (g_log_count < NET_LOG_BUF_SIZE) {
+            g_log_count++;
+        }
+    }
+    xSemaphoreGive(g_log_mutex);
+}
+
+// Copy the rolling buffer sequentially into a target destination buffer
+size_t net_log_read(char *dst, size_t max_len) {
+    if (!dst || max_len == 0) return 0;
+    net_log_init_mutex();
+
+    if (xSemaphoreTake(g_log_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        dst[0] = '\0';
+        return 0;
+    }
+
+    size_t copy_len = (g_log_count < max_len - 1) ? g_log_count : max_len - 1;
+    size_t start = (g_log_head + NET_LOG_BUF_SIZE - g_log_count) % NET_LOG_BUF_SIZE;
+
+    for (size_t i = 0; i < copy_len; i++) {
+        dst[i] = g_net_log_buf[(start + i) % NET_LOG_BUF_SIZE];
+    }
+    dst[copy_len] = '\0';
+
+    xSemaphoreGive(g_log_mutex);
+    return copy_len;
+}
+
+// Parse raw L2 Ethernet frame and log ICMP, ARP, and DHCP packets
+void net_log_packet(bool is_tx, const uint8_t *frame, uint16_t len) {
+    if (!frame || len < 14) return;
+
+    uint16_t eth_type = (frame[12] << 8) | frame[13];
+    uint32_t sec = xTaskGetTickCount() / configTICK_RATE_HZ;
+    char log_entry[128];
+
+    // ARP Packets
+    if (eth_type == 0x0806 && len >= 42) {
+        uint16_t op = (frame[20] << 8) | frame[21];
+        
+        // Note: Ensure log_entry size in net_log_packet is updated to char log_entry[128] to prevent truncation
+        snprintf(log_entry, sizeof(log_entry),
+                 "[%us][%s][ARP] %s %d.%d.%d.%d (%02X:%02X:%02X:%02X:%02X:%02X) -> %d.%d.%d.%d (%02X:%02X:%02X:%02X:%02X:%02X)\n",
+                 (unsigned int)sec, is_tx ? "TX" : "RX",
+                 (op == 1) ? "REQ" : "REP",
+                 // Sender IP & MAC (frame[22..31])
+                 frame[28], frame[29], frame[30], frame[31],
+                 frame[22], frame[23], frame[24], frame[25], frame[26], frame[27],
+                 // Target IP & MAC (frame[32..41])
+                 frame[38], frame[39], frame[40], frame[41],
+                 frame[32], frame[33], frame[34], frame[35], frame[36], frame[37]);
+        
+        net_log_write(log_entry);
+    }
+    // IPv4 Packets
+    else if (eth_type == 0x0800 && len >= 34) {
+        uint8_t ihl = (frame[14] & 0x0F) * 4;
+        uint8_t proto = frame[23];
+
+        // ICMP (Protocol 1)
+        if (proto == 1 && len >= (14 + ihl + 8)) {
+            uint8_t type = frame[14 + ihl];
+            snprintf(log_entry, sizeof(log_entry),
+                     "[%us][%s][ICMP] Type:%d %d.%d.%d.%d->%d.%d.%d.%d\n",
+                     (unsigned int)sec, is_tx ? "TX" : "RX", type,
+                     frame[26], frame[27], frame[28], frame[29],
+                     frame[30], frame[31], frame[32], frame[33]);
+            net_log_write(log_entry);
+        } 
+        // UDP / DHCP (Protocol 17, Ports 67 & 68)
+        else if (proto == 17 && len >= (14 + ihl + 8)) {
+            uint16_t src_port = (frame[14 + ihl] << 8) | frame[14 + ihl + 1];
+            uint16_t dst_port = (frame[14 + ihl + 2] << 8) | frame[14 + ihl + 3];
+
+            if ((src_port == 67 || src_port == 68) && (dst_port == 67 || dst_port == 68)) {
+                snprintf(log_entry, sizeof(log_entry),
+                         "[%us][%s][DHCP] Port %d->%d\n",
+                         (unsigned int)sec, is_tx ? "TX" : "RX",
+                         src_port, dst_port);
+                net_log_write(log_entry);
+            }
+        }
+    }
+}
+
+
+
+int sprintf_lwip_stats(char *buf, size_t max_len) {
+#if LWIP_STATS
+    int offset = 0;
+
+    // Format Active Socket and PCB Counts
+#if MEMP_STATS
+    offset += snprintf(buf + offset, max_len - offset,
+		"<h3> lwip stats</h3>"
+		"<pre>"
+        "--- Active Sockets & PCBs ---\n"
+        "Sockets/Netconns: %d (Max: %d)\n"
+        "TCP Active:       %d (Max: %d)\n"
+        "TCP Listen:       %d (Max: %d)\n"
+        "UDP PCBs:         %d (Max: %d)\n\n",
+        (int)lwip_stats.memp[MEMP_NETCONN]->used, 
+        (int)lwip_stats.memp[MEMP_NETCONN]->max,
+        (int)lwip_stats.memp[MEMP_TCP_PCB]->used, 
+        (int)lwip_stats.memp[MEMP_TCP_PCB]->max,
+        (int)lwip_stats.memp[MEMP_TCP_PCB_LISTEN]->used, 
+        (int)lwip_stats.memp[MEMP_TCP_PCB_LISTEN]->max,
+        (int)lwip_stats.memp[MEMP_UDP_PCB]->used, 
+        (int)lwip_stats.memp[MEMP_UDP_PCB]->max);
+#endif
+
+    // Format Heap Memory Stats
+    offset += snprintf(buf + offset, max_len - offset,
+        "--- Heap Mem ---\nAvail: %d | Used: %d | Max: %d | Err: %d\n\n",
+        (int)lwip_stats.mem.avail, (int)lwip_stats.mem.used,
+        (int)lwip_stats.mem.max, (int)lwip_stats.mem.err);
+
+    // Format Link Layer Stats
+    offset += snprintf(buf + offset, max_len - offset,
+        "--- Link Layer ---\nRx: %d | Tx: %d | Drop: %d | ChkErr: %d\n\n",
+        (int)lwip_stats.link.recv, (int)lwip_stats.link.xmit,
+        (int)lwip_stats.link.drop, (int)lwip_stats.link.chkerr);
+
+    // Format IP Layer Stats
+    offset += snprintf(buf + offset, max_len - offset,
+        "--- IP Layer ---\nRx: %d | Tx: %d | Drop: %d | ProtocolErr: %d\n</pre>",
+        (int)lwip_stats.ip.recv, (int)lwip_stats.ip.xmit,
+        (int)lwip_stats.ip.drop, (int)lwip_stats.ip.proterr);
+
+    return offset; // Total bytes written into buffer
+#else
+    return snprintf(buf, max_len, "LWIP_STATS is disabled in lwipopts.h\n");
+#endif
+}
 
 void dump_all_netifs(void) {
     struct netif *curr;
@@ -255,6 +431,23 @@ static void update_nat_table(uint32_t ip, const uint8_t *mac) {
     g_nat_table[oldest_idx].last_seen = now;
 }
 
+void remove_nat_entry_by_mac(const uint8_t *mac) {
+    if (mac == NULL) return;
+
+    for (int i = 0; i < MAX_NAT_ENTRIES; i++) {
+        // Skip unused slots
+        if (g_nat_table[i].ip == 0) {
+            continue;
+        }
+
+        // Compare 6-byte MAC address
+        if (memcmp(g_nat_table[i].mac, mac, 6) == 0) {
+            // Zero out the slot to mark it as empty for future updates
+            memset(&g_nat_table[i], 0, sizeof(nat_entry_t));
+        }
+    }
+}
+
 // Helper: Lookup client MAC address from target IP
 static uint8_t* lookup_nat_table(uint32_t ip) {
     for (int i = 0; i < MAX_NAT_ENTRIES; i++) {
@@ -284,6 +477,8 @@ static err_t mac_nat_ap_input(struct pbuf *p, struct netif *netif) {
     log_icmp_packet("OUTBOUND AP->STA", p);
 	
 	log_arp_packet("OUTBOUND AP->STA", p);
+	
+	net_log_packet(true, (const uint8_t *)p->payload, p->tot_len);
 
     struct eth_hdr *eth = (struct eth_hdr *)p->payload;
     uint16_t type = lwip_ntohs(eth->type);
@@ -402,6 +597,8 @@ static err_t mac_nat_sta_input(struct pbuf *p, struct netif *netif) {
 	log_icmp_packet("INBOUND STA->AP", p);
 	
 	log_arp_packet("INBOUND STA->AP", p);
+	
+	net_log_packet(false, (const uint8_t *)p->payload, p->tot_len);
 	
 
     struct eth_hdr *eth = (struct eth_hdr *)p->payload;
@@ -554,22 +751,42 @@ static err_t mac_nat_sta_input(struct pbuf *p, struct netif *netif) {
     return original_sta_input(p, netif);
 }
 
+
+
 // -------------------------------------------------------------------
 // 4. Initialization
 // -------------------------------------------------------------------
 void app_mac_nat_init(const char *upstream_ssid, const char *upstream_key,
                       const char *softap_ssid,   const char *softap_key) 
 {
-    printf("[MAC_NAT] Starting BL602 AP+STA Concurrent Mode...\r\n");
+	vTaskDelay(1000);
+	
+	char boot_str[16];
+	get_env_str("boot_count", boot_str, sizeof(boot_str), "0");
+	int boot_count = atoi(boot_str);
 
-    wifi_interface_t ap_interface = wifi_mgmr_ap_enable();
-    wifi_mgmr_ap_start(ap_interface, (char *)softap_ssid, 0, (char *)softap_key, 6);
+	if (boot_count >= 5) {
+		printf("[RECOVERY] Boot count (%d) >= 5! Starting Recovery AP-Only Mode...\r\n", boot_count);
 
-    wifi_interface_t sta_interface = wifi_mgmr_sta_enable();
-    wifi_mgmr_sta_connect_mid(sta_interface, (char *)upstream_ssid, (char *)upstream_key, 
-                              NULL, NULL, 0, 0, 1, WIFI_CONNECT_PMF_CAPABLE);
+		// Enable AP interface and assign static IP / start DHCP server
+		wifi_interface_t ap_interface = wifi_mgmr_ap_enable();
+		wifi_mgmr_ap_start_adv(ap_interface, "BL602Proxy", 0, "BL602Proxy", 6, 1);
+		return; //Do not do any hooks
+		
+		// Optional: Explicitly start DHCP server daemon if not managed automatically by wifi_mgmr
+		// dhcpd_start(ap_interface);
+	} else {
+		printf("[MAC_NAT] Starting BL602 AP+STA Concurrent Mode...\r\n");
 
-    vTaskDelay(10000);
+		wifi_interface_t ap_interface = wifi_mgmr_ap_enable();
+		wifi_mgmr_ap_start_adv(ap_interface, (char *)softap_ssid, 0, (char *)softap_key, 6, 0);
+
+		wifi_interface_t sta_interface = wifi_mgmr_sta_enable();
+		wifi_mgmr_sta_connect_mid(sta_interface, (char *)upstream_ssid, (char *)upstream_key, 
+								  NULL, NULL, 0, 0, 1, WIFI_CONNECT_PMF_CAPABLE);
+	}
+
+    vTaskDelay(9000);
 
     struct netif *sta_netif = netif_find("st2");
     if (sta_netif == NULL) sta_netif = netif_find("st1");
