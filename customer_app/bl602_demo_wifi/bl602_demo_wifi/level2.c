@@ -27,9 +27,11 @@
 #define IP_PROTO_ICMP 1
 #endif
 
+// Max client stations the BL602 SoftAP usually tracks internally
+#define AP_MAX_STA_COUNT 7
+
 static struct netif *g_ap_netif  = NULL;
 static struct netif *g_sta_netif = NULL;
-
 
 #define NET_LOG_BUF_SIZE 4096
 
@@ -394,6 +396,41 @@ static void log_dhcp_packet(const char *dir, struct pbuf *p) {
     printf("===========================================\r\n");
 }
 
+
+static void print_nat_table(void) {
+    printf("\r\n=== NAT Table Contents ===\r\n");
+    printf("Slot | IP Address       | MAC Address       | Last Seen\r\n");
+    printf("-----+------------------+-------------------+-----------\r\n");
+
+    uint8_t active_count = 0;
+
+    for (int i = 0; i < MAX_NAT_ENTRIES; i++) {
+        // Skip empty entries (ip == 0)
+        if (g_nat_table[i].ip == 0) {
+            continue;
+        }
+
+        // Extract IP bytes directly (handles network byte order portably)
+        uint8_t *ip = (uint8_t *)&g_nat_table[i].ip;
+        const uint8_t *mac = g_nat_table[i].mac;
+
+        printf("[%02d] | %-3u.%-3u.%-3u.%-3u | %02X:%02X:%02X:%02X:%02X:%02X | %u\r\n",
+               i,
+               ip[0], ip[1], ip[2], ip[3],
+               mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+               g_nat_table[i].last_seen);
+
+        active_count++;
+    }
+
+    if (active_count == 0) {
+        printf(" (Table is empty)\r\n");
+    }
+
+    printf("===========================\r\n");
+    printf("Active Entries: %u / %d\r\n\r\n", active_count, MAX_NAT_ENTRIES);
+}
+
 // Helper: Update or insert a MAC-to-IP mapping
 static void update_nat_table(uint32_t ip, const uint8_t *mac) {
     if (ip == 0) return;
@@ -416,6 +453,7 @@ static void update_nat_table(uint32_t ip, const uint8_t *mac) {
             g_nat_table[i].ip = ip;
             memcpy(g_nat_table[i].mac, mac, 6);
             g_nat_table[i].last_seen = now;
+			print_nat_table();
             return;
         }
         // Track oldest entry for eviction if full
@@ -431,21 +469,44 @@ static void update_nat_table(uint32_t ip, const uint8_t *mac) {
     g_nat_table[oldest_idx].last_seen = now;
 }
 
-void remove_nat_entry_by_mac(const uint8_t *mac) {
-    if (mac == NULL) return;
+void refresh_nat_entries(void) {
+    uint8_t active_macs[AP_MAX_STA_COUNT][6];
+    uint8_t active_count = 0;
 
+    // 1. Gather MAC addresses of all currently connected STAs
+    for (uint8_t i = 0; i < AP_MAX_STA_COUNT; i++) {
+        wifi_sta_basic_info_t sta;
+        memset(&sta, 0, sizeof(sta));
+
+        if (wifi_mgmr_ap_sta_info_get((struct wifi_sta_basic_info *)&sta, i) == 0) {
+            memcpy(active_macs[active_count], sta.sta_mac, 6);
+            active_count++;
+        }
+    }
+
+    // 2. Clear NAT entries whose MAC address is no longer in the active list
     for (int i = 0; i < MAX_NAT_ENTRIES; i++) {
-        // Skip unused slots
         if (g_nat_table[i].ip == 0) {
-            continue;
+            continue; // Skip inactive/empty slots
         }
 
-        // Compare 6-byte MAC address
-        if (memcmp(g_nat_table[i].mac, mac, 6) == 0) {
-            // Zero out the slot to mark it as empty for future updates
+        bool is_active = false;
+        for (uint8_t j = 0; j < active_count; j++) {
+            if (memcmp(g_nat_table[i].mac, active_macs[j], 6) == 0) {
+                is_active = true;
+                break;
+            }
+        }
+
+        if (!is_active) {
+            printf("[APP] [NAT] Purging stale entry for MAC: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+                   g_nat_table[i].mac[0], g_nat_table[i].mac[1], g_nat_table[i].mac[2],
+                   g_nat_table[i].mac[3], g_nat_table[i].mac[4], g_nat_table[i].mac[5]);
+            
             memset(&g_nat_table[i], 0, sizeof(nat_entry_t));
         }
     }
+	print_nat_table();
 }
 
 int lookup_nat_table_by_mac(const uint8_t *mac) {
@@ -543,7 +604,8 @@ static err_t mac_nat_ap_input(struct pbuf *p, struct netif *netif) {
         if (!is_bcast_mcast) {
             uint32_t dest_ip = iphdr->dest.addr;
             if (dest_ip == netif_ip4_addr(netif)->addr || 
-               (g_sta_netif && dest_ip == netif_ip4_addr(g_sta_netif)->addr)) {
+               (g_sta_netif && dest_ip == netif_ip4_addr(g_sta_netif)->addr) ||
+			   (lookup_nat_table(dest_ip) != NULL) ) {
 				SMEMCPY(eth->dest.addr, g_sta_netif->hwaddr, ETH_HWADDR_LEN);
                 return g_sta_netif->input(p, g_sta_netif);
             }
@@ -561,8 +623,8 @@ static err_t mac_nat_ap_input(struct pbuf *p, struct netif *netif) {
 
 
 		if (target_ip == netif_ip4_addr(netif)->addr || 
-		   (g_sta_netif && target_ip == netif_ip4_addr(g_sta_netif)->addr) /*||
-		   (lookup_nat_table(target_ip) != NULL) */ ) {
+		   (g_sta_netif && target_ip == netif_ip4_addr(g_sta_netif)->addr) ||
+		   (lookup_nat_table(target_ip) != NULL) ) {
 			return g_sta_netif->input(p, g_sta_netif);
 		}
     }
