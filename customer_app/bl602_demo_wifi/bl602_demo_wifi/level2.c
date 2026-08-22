@@ -448,6 +448,24 @@ void remove_nat_entry_by_mac(const uint8_t *mac) {
     }
 }
 
+int lookup_nat_table_by_mac(const uint8_t *mac) {
+    if (mac == NULL) return 0;
+
+    for (int i = 0; i < MAX_NAT_ENTRIES; i++) {
+        // Skip unused slots
+        if (g_nat_table[i].ip == 0) {
+            continue;
+        }
+
+        // Compare 6-byte MAC address
+        if (memcmp(g_nat_table[i].mac, mac, 6) == 0) {
+            // Zero out the slot to mark it as empty for future updates
+            return 1;
+        }
+    }
+	return 0;
+}
+
 // Helper: Lookup client MAC address from target IP
 static uint8_t* lookup_nat_table(uint32_t ip) {
     for (int i = 0; i < MAX_NAT_ENTRIES; i++) {
@@ -462,6 +480,23 @@ static uint8_t* lookup_nat_table(uint32_t ip) {
 // 1. Outbound Link Output Hook
 // -------------------------------------------------------------------
 static err_t mac_nat_sta_linkoutput(struct netif *netif, struct pbuf *p) {
+    struct eth_hdr *eth = (struct eth_hdr *)p->payload;
+
+    // Check if the target MAC belongs to an AP-connected client
+    if (g_ap_netif && lookup_nat_table_by_mac(eth->dest.addr)) {
+		
+		log_dhcp_packet("REDIRECTED STA->AP", p);
+	
+		log_icmp_packet("REDIRECTED STA->AP", p);
+		
+		log_arp_packet("REDIRECTED STA->AP", p);
+        
+        // REWRITE: Change Source MAC from STA MAC to AP MAC
+        SMEMCPY(eth->src.addr, g_ap_netif->hwaddr, ETH_HWADDR_LEN);
+
+        // Redirect packet down to the AP Wi-Fi driver
+        return g_ap_netif->linkoutput(g_ap_netif, p);
+    }
     return original_sta_linkoutput(netif, p);
 }
 
@@ -509,7 +544,8 @@ static err_t mac_nat_ap_input(struct pbuf *p, struct netif *netif) {
             uint32_t dest_ip = iphdr->dest.addr;
             if (dest_ip == netif_ip4_addr(netif)->addr || 
                (g_sta_netif && dest_ip == netif_ip4_addr(g_sta_netif)->addr)) {
-                return original_ap_input(p, netif);
+				SMEMCPY(eth->dest.addr, g_sta_netif->hwaddr, ETH_HWADDR_LEN);
+                return g_sta_netif->input(p, g_sta_netif);
             }
         }
     } 
@@ -523,13 +559,12 @@ static err_t mac_nat_ap_input(struct pbuf *p, struct netif *netif) {
             update_nat_table(src_ip, eth->src.addr);
         }
 
-        if (!is_bcast_mcast) {
-            if (target_ip == netif_ip4_addr(netif)->addr || 
-               (g_sta_netif && target_ip == netif_ip4_addr(g_sta_netif)->addr) ||
-               (lookup_nat_table(target_ip) != NULL)) {
-                return original_ap_input(p, netif);
-            }
-        }
+
+		if (target_ip == netif_ip4_addr(netif)->addr || 
+		   (g_sta_netif && target_ip == netif_ip4_addr(g_sta_netif)->addr) /*||
+		   (lookup_nat_table(target_ip) != NULL) */ ) {
+			return g_sta_netif->input(p, g_sta_netif);
+		}
     }
 
     // Allocate copy for forwarding upstream over STA interface
