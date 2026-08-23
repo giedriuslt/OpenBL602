@@ -733,9 +733,9 @@ static err_t mac_nat_sta_input(struct pbuf *p, struct netif *netif) {
                     return original_sta_input(p, netif);
                 }
 
-                if (yiaddr != 0) {
-                    update_nat_table(yiaddr, chaddr);
-                }
+                //if (yiaddr != 0) {
+                //    update_nat_table(yiaddr, chaddr);
+                //}
 
                 if (g_ap_netif != NULL) {
                     struct pbuf *q = pbuf_alloc(PBUF_RAW_TX, p->tot_len, PBUF_RAM);
