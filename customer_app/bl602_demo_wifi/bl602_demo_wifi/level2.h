@@ -1,5 +1,6 @@
-void app_mac_nat_init(const char *upstream_ssid, const char *upstream_key,
-                      const char *softap_ssid,   const char *softap_key);
+void app_ap_init(const char *ssid, const char *key, uint8_t channel);
+void app_sta_init(const char *ssid, const char *key);
+void app_recovery_init(uint8_t channel);
 size_t net_log_read(char *dst, size_t max_len);
 int sprintf_lwip_stats(char *buf, size_t max_len);
 void refresh_nat_entries(void);

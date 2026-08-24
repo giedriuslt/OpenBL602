@@ -853,37 +853,13 @@ static err_t mac_nat_sta_input(struct pbuf *p, struct netif *netif) {
 // -------------------------------------------------------------------
 // 4. Initialization
 // -------------------------------------------------------------------
-void app_mac_nat_init(const char *upstream_ssid, const char *upstream_key,
-                      const char *softap_ssid,   const char *softap_key) 
+void app_sta_init(const char *ssid, const char *key)
 {
-	vTaskDelay(1000);
-	
-	char boot_str[16];
-	get_env_str("boot_count", boot_str, sizeof(boot_str), "0");
-	int boot_count = atoi(boot_str);
+    wifi_interface_t sta_interface = wifi_mgmr_sta_enable();
+    wifi_mgmr_sta_connect_mid(sta_interface, (char *)ssid, (char *)key, 
+                              NULL, NULL, 0, 0, 1, WIFI_CONNECT_PMF_CAPABLE);
 
-	if (boot_count >= 5) {
-		printf("[RECOVERY] Boot count (%d) >= 5! Starting Recovery AP-Only Mode...\r\n", boot_count);
-
-		// Enable AP interface and assign static IP / start DHCP server
-		wifi_interface_t ap_interface = wifi_mgmr_ap_enable();
-		wifi_mgmr_ap_start_adv(ap_interface, "BL602Proxy", 0, "BL602Proxy", 6, 1);
-		return; //Do not do any hooks
-		
-		// Optional: Explicitly start DHCP server daemon if not managed automatically by wifi_mgmr
-		// dhcpd_start(ap_interface);
-	} else {
-		printf("[MAC_NAT] Starting BL602 AP+STA Concurrent Mode...\r\n");
-
-		wifi_interface_t ap_interface = wifi_mgmr_ap_enable();
-		wifi_mgmr_ap_start_adv(ap_interface, (char *)softap_ssid, 0, (char *)softap_key, 6, 0);
-
-		wifi_interface_t sta_interface = wifi_mgmr_sta_enable();
-		wifi_mgmr_sta_connect_mid(sta_interface, (char *)upstream_ssid, (char *)upstream_key, 
-								  NULL, NULL, 0, 0, 1, WIFI_CONNECT_PMF_CAPABLE);
-	}
-
-    vTaskDelay(9000);
+    vTaskDelay(pdMS_TO_TICKS(9000));
 
     struct netif *sta_netif = netif_find("st2");
     if (sta_netif == NULL) sta_netif = netif_find("st1");
@@ -905,7 +881,14 @@ void app_mac_nat_init(const char *upstream_ssid, const char *upstream_key,
         dump_all_netifs();
         printf("[MAC_NAT] Error: STA netif interface not found!\r\n");
     }
-    
+}
+
+// 2. Access Point Mode Initialization & Hooks
+void app_ap_init(const char *ssid, const char *key, uint8_t channel) 
+{
+    wifi_interface_t ap_interface = wifi_mgmr_ap_enable();
+    wifi_mgmr_ap_start_adv(ap_interface, (char *)ssid, 0, (char *)key, channel, 0);
+
     struct netif *ap_netif = netif_find("ap2");
     if (ap_netif == NULL) ap_netif = netif_find("ap1");
     if (ap_netif == NULL) ap_netif = netif_find("ap0");
@@ -923,4 +906,15 @@ void app_mac_nat_init(const char *upstream_ssid, const char *upstream_key,
         dump_all_netifs();
         printf("[MAC_NAT] Error: AP netif interface not found!\r\n");
     }
+}
+
+// 3. Recovery AP-Only Mode Initialization
+void app_recovery_init(uint8_t channel) 
+{
+    printf("[RECOVERY] Starting Recovery AP-Only Mode...\r\n");
+
+    wifi_interface_t ap_interface = wifi_mgmr_ap_enable();
+    wifi_mgmr_ap_start_adv(ap_interface, "BL602Proxy", 0, "BL602Proxy", channel, 1);
+    
+    // Optional: dhcpd_start(ap_interface);
 }

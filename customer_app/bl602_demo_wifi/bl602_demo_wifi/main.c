@@ -495,17 +495,7 @@ static void event_cb_wifi_event(input_event_t *event, void *private_data)
             uint8_t sta_idx = (uint8_t)(uint32_t)event->value;
             printf("[APP] [EVT] [AP] [DEL] %lld, sta idx is %u\r\n", aos_now_ms(), sta_idx);
 
-            wifi_sta_basic_info_t sta;
-            memset(&sta, 0, sizeof(sta));
-
-            // Fetch STA details before clearing from NAT table
-            if (wifi_mgmr_ap_sta_info_get((struct wifi_sta_basic_info *)&sta, sta_idx) == 0) {
-                remove_nat_entry_by_mac(sta.sta_mac);
-
-                printf("[APP] [EVT] [AP] [DEL] Purged NAT entry for MAC: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
-                       sta.sta_mac[0], sta.sta_mac[1], sta.sta_mac[2],
-                       sta.sta_mac[3], sta.sta_mac[4], sta.sta_mac[5]);
-            }
+            refresh_nat_entries();
             break;
         }
         break;
@@ -922,6 +912,63 @@ void start_watchdog_task(void) {
     xTaskCreate(watchdog_task, "WDT_Task", 1024, NULL, tskIDLE_PRIORITY + 1, NULL);
 }
 
+static bool is_wifi_param_valid(const char *ssid, const char *key) {
+    if (ssid == NULL || strlen(ssid) == 0) {
+        return false;
+    }
+    if (key == NULL || strlen(key) < 8) {
+        return false;
+    }
+    return true;
+}
+
+void app_mac_nat_init_from_env(void)
+{
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    char boot_str[16] = {0};
+    char sta_ssid[33] = {0};
+    char sta_key[65]  = {0};
+    char ap_ssid[33]  = {0};
+    char ap_key[65]   = {0};
+
+    // 1. Read EasyFlash keys matching your form fields
+    get_env_str("boot_count",   boot_str, sizeof(boot_str), "0");
+    get_env_str("UpstreamSSID", sta_ssid, sizeof(sta_ssid), "");
+    get_env_str("UpstreamPSK",  sta_key,  sizeof(sta_key),  "");
+    get_env_str("DeviceSSID",   ap_ssid,  sizeof(ap_ssid),  "");
+    get_env_str("DevicePSK",    ap_key,   sizeof(ap_key),   "");
+
+    int boot_count = atoi(boot_str);
+    uint8_t ap_channel = (uint8_t)6;
+    if (ap_channel < 1 || ap_channel > 14) {
+        ap_channel = 6;
+    }
+
+    // 2. Validate both STA and AP configurations
+    bool sta_ok = is_wifi_param_valid(sta_ssid, sta_key);
+    bool ap_ok  = is_wifi_param_valid(ap_ssid, ap_key);
+
+    // 3. Fallback to recovery mode if boot limit reached or validation fails
+    if (boot_count >= 5) {
+        printf("[RECOVERY] Boot count (%d) >= 5! Entering Recovery Mode...\r\n", boot_count);
+        app_recovery_init(ap_channel);
+        return;
+    }
+
+    if (!sta_ok || !ap_ok) {
+        printf("[RECOVERY] Credential validation failed (Upstream OK: %d, Device OK: %d). Entering Recovery Mode...\r\n", 
+               sta_ok, ap_ok);
+        app_recovery_init(ap_channel);
+        return;
+    }
+
+    // 4. Start concurrent AP + STA if credentials pass
+    printf("[MAC_NAT] Verified environment variables. Starting AP+STA mode on channel %d...\r\n", ap_channel);
+    app_sta_init(sta_ssid, sta_key);
+    app_ap_init(ap_ssid, ap_key, ap_channel);
+}
+
 static void proc_main_entry(void *pvParameters)
 {
     easyflash_init();
@@ -931,6 +978,9 @@ static void proc_main_entry(void *pvParameters)
 
     aos_register_event_filter(EV_WIFI, event_cb_wifi_event, NULL);
     cmd_stack_wifi(NULL, 0, 0, NULL);
+	start_watchdog_task();
+	app_mac_nat_init_from_env();
+	start_webserver_task();
 
     vTaskDelete(NULL);
 }
