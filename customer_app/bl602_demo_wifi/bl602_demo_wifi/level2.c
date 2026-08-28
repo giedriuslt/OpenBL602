@@ -96,57 +96,80 @@ size_t net_log_read(char *dst, size_t max_len) {
     return copy_len;
 }
 
-// Parse raw L2 Ethernet frame and log ICMP, ARP, and DHCP packets
+// Parse raw L2 Ethernet frame and log ICMP, ARP, DHCP, and HTTP GET packets
 void net_log_packet(bool is_tx, const uint8_t *frame, uint16_t len) {
     if (!frame || len < 14) return;
 
     uint16_t eth_type = (frame[12] << 8) | frame[13];
+    uint16_t ip_offset = 14;
+
+    // Handle 802.1Q VLAN Tagging
+    if (eth_type == 0x8100 && len >= 18) {
+        eth_type = (frame[16] << 8) | frame[17];
+        ip_offset = 18;
+    }
+
     uint32_t sec = xTaskGetTickCount() / configTICK_RATE_HZ;
     char log_entry[128];
 
     // ARP Packets
-    if (eth_type == 0x0806 && len >= 42) {
-        uint16_t op = (frame[20] << 8) | frame[21];
-        
-        // Note: Ensure log_entry size in net_log_packet is updated to char log_entry[128] to prevent truncation
+    if (eth_type == 0x0806 && len >= (ip_offset + 28)) {
+        uint16_t op = (frame[ip_offset + 6] << 8) | frame[ip_offset + 7];
         snprintf(log_entry, sizeof(log_entry),
-                 "[%us][%s][ARP] %s %d.%d.%d.%d (%02X:%02X:%02X:%02X:%02X:%02X) -> %d.%d.%d.%d (%02X:%02X:%02X:%02X:%02X:%02X)\n",
+                 "[%us][%s][ARP] %s %d.%d.%d.%d -> %d.%d.%d.%d\n",
                  (unsigned int)sec, is_tx ? "TX" : "RX",
                  (op == 1) ? "REQ" : "REP",
-                 // Sender IP & MAC (frame[22..31])
-                 frame[28], frame[29], frame[30], frame[31],
-                 frame[22], frame[23], frame[24], frame[25], frame[26], frame[27],
-                 // Target IP & MAC (frame[32..41])
-                 frame[38], frame[39], frame[40], frame[41],
-                 frame[32], frame[33], frame[34], frame[35], frame[36], frame[37]);
-        
+                 frame[ip_offset + 14], frame[ip_offset + 15], frame[ip_offset + 16], frame[ip_offset + 17],
+                 frame[ip_offset + 24], frame[ip_offset + 25], frame[ip_offset + 26], frame[ip_offset + 27]);
         net_log_write(log_entry);
     }
     // IPv4 Packets
-    else if (eth_type == 0x0800 && len >= 34) {
-        uint8_t ihl = (frame[14] & 0x0F) * 4;
-        uint8_t proto = frame[23];
+    else if (eth_type == 0x0800 && len >= (ip_offset + 20)) {
+        uint8_t ihl = (frame[ip_offset] & 0x0F) * 4;
+        uint8_t proto = frame[ip_offset + 9];
+        uint16_t l4_offset = ip_offset + ihl;
 
         // ICMP (Protocol 1)
-        if (proto == 1 && len >= (14 + ihl + 8)) {
-            uint8_t type = frame[14 + ihl];
+        if (proto == 1 && len >= (l4_offset + 8)) {
+            uint8_t type = frame[l4_offset];
             snprintf(log_entry, sizeof(log_entry),
-                     "[%us][%s][ICMP] Type:%d %d.%d.%d.%d->%d.%d.%d.%d\n",
+                     "[%us][%s][ICMP] Type:%d %d.%d.%d.%d -> %d.%d.%d.%d\n",
                      (unsigned int)sec, is_tx ? "TX" : "RX", type,
-                     frame[26], frame[27], frame[28], frame[29],
-                     frame[30], frame[31], frame[32], frame[33]);
+                     frame[ip_offset + 12], frame[ip_offset + 13], frame[ip_offset + 14], frame[ip_offset + 15],
+                     frame[ip_offset + 16], frame[ip_offset + 17], frame[ip_offset + 18], frame[ip_offset + 19]);
             net_log_write(log_entry);
-        } 
-        // UDP / DHCP (Protocol 17, Ports 67 & 68)
-        else if (proto == 17 && len >= (14 + ihl + 8)) {
-            uint16_t src_port = (frame[14 + ihl] << 8) | frame[14 + ihl + 1];
-            uint16_t dst_port = (frame[14 + ihl + 2] << 8) | frame[14 + ihl + 3];
+        }
+        // TCP / HTTP GET (Protocol 6)
+		else if (proto == 6 && len >= (l4_offset + 20)) {
+			uint8_t tcp_hdr_len = ((frame[l4_offset + 12] >> 4) & 0x0F) * 4;
+			uint16_t payload_offset = l4_offset + tcp_hdr_len;
+			
+			uint16_t src_port = (frame[l4_offset] << 8) | frame[l4_offset + 1];
+			uint16_t dst_port = (frame[l4_offset + 2] << 8) | frame[l4_offset + 3];
+
+			// Check if packet contains "GET " payload
+			bool is_get = (len >= payload_offset + 4) && 
+						  (memcmp(&frame[payload_offset], "GET ", 4) == 0);
+
+			snprintf(log_entry, sizeof(log_entry),
+					 "[%us][%s][%s] %d.%d.%d.%d:%u -> %d.%d.%d.%d:%u (payload: %d bytes)\n",
+					 (unsigned int)sec, is_tx ? "TX" : "RX",
+					 is_get ? "HTTP GET" : "TCP",
+					 frame[ip_offset + 12], frame[ip_offset + 13], frame[ip_offset + 14], frame[ip_offset + 15], src_port,
+					 frame[ip_offset + 16], frame[ip_offset + 17], frame[ip_offset + 18], frame[ip_offset + 19], dst_port,
+					 (len > payload_offset) ? (len - payload_offset) : 0);
+			
+			net_log_write(log_entry);
+		}
+        // UDP / DHCP (Protocol 17)
+        else if (proto == 17 && len >= (l4_offset + 8)) {
+            uint16_t src_port = (frame[l4_offset] << 8) | frame[l4_offset + 1];
+            uint16_t dst_port = (frame[l4_offset + 2] << 8) | frame[l4_offset + 3];
 
             if ((src_port == 67 || src_port == 68) && (dst_port == 67 || dst_port == 68)) {
                 snprintf(log_entry, sizeof(log_entry),
                          "[%us][%s][DHCP] Port %d->%d\n",
-                         (unsigned int)sec, is_tx ? "TX" : "RX",
-                         src_port, dst_port);
+                         (unsigned int)sec, is_tx ? "TX" : "RX", src_port, dst_port);
                 net_log_write(log_entry);
             }
         }
@@ -886,6 +909,7 @@ void app_sta_init(const char *ssid, const char *key)
 // 2. Access Point Mode Initialization & Hooks
 void app_ap_init(const char *ssid, const char *key, uint8_t channel) 
 {
+	//wifi_mgmr_ap_stop(NULL);
     wifi_interface_t ap_interface = wifi_mgmr_ap_enable();
     wifi_mgmr_ap_start_adv(ap_interface, (char *)ssid, 0, (char *)key, channel, 0);
 
@@ -906,6 +930,9 @@ void app_ap_init(const char *ssid, const char *key, uint8_t channel)
         dump_all_netifs();
         printf("[MAC_NAT] Error: AP netif interface not found!\r\n");
     }
+	if (g_sta_netif != NULL) {
+		netif_set_default(g_sta_netif);
+	}
 }
 
 // 3. Recovery AP-Only Mode Initialization

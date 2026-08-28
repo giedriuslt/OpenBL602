@@ -138,27 +138,56 @@ static void http_server_task(void *pvParameters) {
     while (1) {
         int client_fd = accept(server_fd, NULL, NULL);
         if (client_fd < 0) continue;
-		
-		// Define a 5-second timeout structure
-		struct timeval timeout;
-		timeout.tv_sec = 5;       // 5 seconds
-		timeout.tv_usec = 0;      // 0 microseconds
+        printf("Accepted fd %d", client_fd);
+        
+        // Define a 5-second timeout structure
+        struct timeval timeout;
+        timeout.tv_sec = 0;       // 5 seconds
+        timeout.tv_usec = 500000;      // 0 microseconds
 
-		// Set Receive Timeout
-		if (setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
-			printf("Failed to set SO_RCVTIMEO on fd %d", client_fd);
-		}
+        // Set Receive Timeout
+        if (setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+            printf("Failed to set SO_RCVTIMEO on fd %d", client_fd);
+        }
 
-		// Set Send Timeout (Highly recommended so a stalled client can't block send() indefinitely)
-		if (setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) < 0) {
-			printf("Failed to set SO_SNDTIMEO on fd %d", client_fd);
-		}
+        // Set Send Timeout (Highly recommended so a stalled client can't block send() indefinitely)
+        if (setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) < 0) {
+            printf("Failed to set SO_SNDTIMEO on fd %d", client_fd);
+        }
 
         memset(chunk, 0, 1024);
-        int read_len = read(client_fd, chunk, 1023);
+        int total_read = 0;
+        int read_len = 0;
+        const int capacity = 1023; // Save 1 byte at the end for '\0'
 
-        if (read_len > 0) {
-            chunk[read_len] = '\0';
+        // Accumulate data into chunk until capacity is reached
+        while (total_read == 0) {
+            read_len = read(client_fd, chunk + total_read, capacity - total_read);
+
+            if (read_len > 0) {
+                total_read += read_len;
+                chunk[total_read] = '\0'; // Guarantee valid string termination at all times
+            } 
+            else if (read_len == 0) {
+                // Connection closed by peer
+                printf("Client on fd %d closed connection. Read %d total bytes.\n", client_fd, total_read);
+                break;
+            } 
+            else {
+                // Error handling
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    printf("Read timeout on fd %d after %d bytes\n", client_fd, total_read);
+                    break;
+                } else {
+                    printf("Read error on fd %d (errno: %d)\n", client_fd, errno);
+                    break;
+                }
+            }
+        }
+
+        if (total_read > 0) {
+            printf("Read len %d", total_read);
+            chunk[total_read] = '\0';
 
             if (strstr(chunk, "GET /favicon.ico")) {
                 const char *not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
@@ -263,9 +292,9 @@ static void http_server_task(void *pvParameters) {
 
                 const char *table_footer = "</table><br>";
                 send(client_fd, table_footer, strlen(table_footer), 0);
-				
-				sprintf_lwip_stats(chunk, 1024);
-				send(client_fd, chunk, strlen(chunk), 0);
+                
+                sprintf_lwip_stats(chunk, 1024);
+                send(client_fd, chunk, strlen(chunk), 0);
 
                 // --- CHUNK 3: Network Traffic Log ---
                 const char *log_header = 
@@ -315,6 +344,10 @@ static void http_server_task(void *pvParameters) {
                 );
                 send(client_fd, chunk, len, 0);
             }
+        }
+        else
+        {
+            printf("Read len zero");
         }
         close(client_fd);
     }
