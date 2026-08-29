@@ -82,6 +82,36 @@ static void url_decode(char *dst, const char *src, size_t max_len) {
     }
     dst[i] = '\0';
 }
+char *trim(char *str) {
+    if (!str) return NULL;
+
+    // 1. Find the first non-whitespace character
+    char *start = str;
+    while (isspace((unsigned char)*start)) {
+        start++;
+    }
+
+    // 2. If string is empty or all whitespace
+    if (*start == '\0') {
+        *str = '\0';
+        return str;
+    }
+
+    // 3. Find the last non-whitespace character
+    char *end = start + strlen(start) - 1;
+    while (end > start && isspace((unsigned char)*end)) {
+        end--;
+    }
+
+    // 4. Shift trimmed substring to the start of the original buffer
+    size_t len = (size_t)(end - start + 1);
+    memmove(str, start, len);
+
+    // 5. Null-terminate at the new length
+    str[len] = '\0';
+
+    return str;
+}
 
 static bool get_form_field(const char *body, const char *key, char *out_val, size_t max_len) {
     char search_pattern[48];
@@ -100,6 +130,7 @@ static bool get_form_field(const char *body, const char *key, char *out_val, siz
     }
     raw_buf[len] = '\0';
     url_decode(out_val, raw_buf, max_len);
+    trim(out_val);
     return true;
 }
 
