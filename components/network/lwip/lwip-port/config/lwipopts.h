@@ -69,7 +69,7 @@ a lot of data that needs to be copied, this should be set high. */
 #elif defined(CFG_SDIOWIFI)
 #define MEM_SIZE                (24*1024)
 #else
-#define MEM_SIZE                (8*1024)
+#define MEM_SIZE                (24*1024)
 #endif
 
 
