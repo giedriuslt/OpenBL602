@@ -177,15 +177,15 @@
         tx {
             status = "disable";
             pin = <11>;         // only support 11
-            mode = "NEC";       // NEC„ÄÅExtenedNEC„ÄÅRC5„ÄÅSWM
+            mode = "NEC";       // NEC„  ExtenedNEC„Ä RC5   SWM
             interval = <100>;   // ms
-            active_mode = "Hi"; //Hi„ÄÅLo
+            active_mode = "Hi"; //Hi„Ä Lo
         };
         rx {
             status = "okay";
             pin = <12>;         // only support 12 13
-            mode = "NEC";       // NEC„ÄÅExtenedNEC„ÄÅRC5„ÄÅSWM
-            active_mode = "Hi"; //Hi„ÄÅLo
+            mode = "NEC";       // NEC„  ExtenedNEC„Ä RC5„Ä SWM
+            active_mode = "Hi"; //Hi„  Lo
         };
     };
     uart {
